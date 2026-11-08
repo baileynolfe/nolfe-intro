@@ -29,7 +29,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;oversc
 #skip-intro:hover,#skip-intro:focus-visible{color:rgba(240,250,248,.92)}
 #skip-intro:focus-visible{outline:1px solid rgba(240,250,248,.6);outline-offset:1px}
 html[data-entry=crossing] #skip-intro,html[data-entry=inside] #skip-intro,html[data-entry=crossing] #sound-toggle,html[data-entry=inside] #sound-toggle{display:none}
-#sound-toggle{position:fixed;z-index:30;right:calc(96px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));width:34px;height:31px;padding:7px 8px;background:none;border:0;color:rgba(213,236,231,.42);cursor:pointer;opacity:0;transition:opacity .7s,color .2s}
+#sound-toggle{position:fixed;z-index:30;left:calc(12px + env(safe-area-inset-left));top:calc(12px + env(safe-area-inset-top));width:34px;height:31px;padding:7px 8px;background:none;border:0;color:rgba(213,236,231,.42);cursor:pointer;opacity:0;transition:opacity .9s ease,color .2s}
 #sound-toggle.on{opacity:1}#sound-toggle:hover,#sound-toggle:focus-visible{color:rgba(240,250,248,.92)}#sound-toggle:focus-visible{outline:1px solid rgba(240,250,248,.6);outline-offset:1px}
 #sound-toggle svg{display:block;width:100%;height:100%}#sound-toggle .waves{transition:opacity .2s}#sound-toggle.off .waves{opacity:0}#sound-toggle .slash{opacity:0}#sound-toggle.off .slash{opacity:1}
 #sound-toggle.invite{animation:nolfe-invite 1.3s ease-in-out 2}@keyframes nolfe-invite{0%,100%{color:rgba(213,236,231,.42)}50%{color:rgba(240,250,248,1);transform:scale(1.15)}}

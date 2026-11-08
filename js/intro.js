@@ -403,8 +403,12 @@ function unlockVideo() {      // iOS paints seeked frames reliably once the elem
 
 // ---- boot ---------------------------------------------------------------------------------------------
 function onFirstPaint() {
-  setTimeout(() => { if (alive && !crossingStarted && performance.now() - lastInput > 600) hint.classList.add('on'); }, 700);
-  setTimeout(() => { if (alive) { skipBtn.classList.add('on'); const sb = document.getElementById('sound-toggle'); if (sb) sb.classList.add('on'); } }, 1400);
+  setTimeout(() => {                                   // the swipe hint and the sound button (top left) arrive together
+    if (!alive) return;
+    if (!crossingStarted && performance.now() - lastInput > 600) hint.classList.add('on');
+    const sb = document.getElementById('sound-toggle'); if (sb) sb.classList.add('on');
+  }, 700);
+  setTimeout(() => { if (alive) skipBtn.classList.add('on'); }, 1400);
   setTimeout(() => { const au = AUD(); if (au && alive) au.load(); }, 1800);
   setTimeout(() => { const tb = TB(); if (tb && alive) tb.preload(); }, 2500);
 }
