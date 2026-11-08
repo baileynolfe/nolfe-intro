@@ -5,13 +5,15 @@
      scrubs the same sounds in reverse at the speed you slide: the DJ-scratch blend.
    * States, in real time. The stair light's buzz is synthesized live (muffled until the door opens). Each dog's growl
      loops at its natural speed while its head is up: it begins as the head rises and stops if you scroll back until it
-     lowers.
+     lowers. Sliding backward plays the growls backward too, at the speed you slide, from where they were; pause for a
+     second and the growling fades out, and it comes back when you move.
    * The sinker. Once you pass Asher a live bass drone on the growls' own pulse rises, every sound starts to slow (the
      growls, the buzz, the footsteps) and the room blurs into a long dark wash: the further you swipe, the more
      everything blends together and fades, along the curve of the owner's reference recording, silent at the threshold.
-   Sounds live where their sources are (HRTF panners; the listener rides the camera's path). Browsers only allow sound
-   after a tap, click or key press: it starts with the first one (a phone swipe counts, a scroll wheel doesn't) and the
-   speaker button mutes it. ?sound=off disables it; off with reduced motion.
+   Sounds live where their sources are (HRTF panners; the listener rides the camera's path). Sound is off when the page
+   loads: the speaker button turns it on (and off). Turning it on also switches an iPhone into media playback (the Audio
+   Session API where there is one, plus a looping silent <audio> element), so it plays even with the ringer switch on
+   silent. ?sound=off removes it; off with reduced motion.
    Test switches: ?verb=0.22 sets the room reverb send (default 0.11), ?sinker=off leaves out the sinker.
    The same graph renders offline (NolfeIntroAudio.renderOffline) for previews. Assets: tools/build_audio.py. */
 (function () {
@@ -100,17 +102,25 @@ async function build(ctx, scene, ev, bufs, lv = LEVEL) {
   };
 
   // states: each dog's growl loops at natural speed while its head is up
+  // ... and backward (from the same point in the loop, at the speed you slide) when you slide backward
   const loopLevel = { growl: new GainNode(ctx), mango: new GainNode(ctx) }, voices = { growl: null, mango: null };
   for (const s in loopLevel) loopLevel[s].connect(chains[s][0]);
-  const gateOn = (s, when, rise) => {
-    const src = new AudioBufferSourceNode(ctx, { buffer: bufs[LOOPS[s]], loop: true, playbackRate: rate }), g = new GainNode(ctx, { gain: 0 });
-    src.connect(g).connect(loopLevel[s]); g.gain.setValueAtTime(0, when); g.gain.setTargetAtTime(1, when, rise / 3); src.start(when);
-    voices[s] = { src, g };
+  const reversed = (b) => { const r = ctx.createBuffer(1, b.length, b.sampleRate), a = b.getChannelData(0), d = r.getChannelData(0);
+    for (let i = 0, k = a.length - 1; k >= 0; i++, k--) d[i] = a[k]; return r; };
+  const loopBuf = {}, pos = { growl: 0, mango: 0 };                // pos: seconds into the forward loop
+  for (const s in LOOPS) { const f = bufs[LOOPS[s]]; loopBuf[s] = { f, r: reversed(f), L: f.duration }; }
+  const voiceOn = (s, when, dir, pr, rise) => {
+    const lb = loopBuf[s], off = ((dir > 0 ? pos[s] : lb.L - pos[s]) % lb.L + lb.L) % lb.L;
+    const src = new AudioBufferSourceNode(ctx, { buffer: dir > 0 ? lb.f : lb.r, loop: true, playbackRate: pr }), g = new GainNode(ctx, { gain: 0 });
+    src.connect(g).connect(loopLevel[s]); g.gain.setValueAtTime(0, when); g.gain.setTargetAtTime(1, when, rise / 3); src.start(when, off);
+    voices[s] = { src, g, dir, pr };
   };
-  const gateOff = (s, when) => {
+  const voiceOff = (s, when, tc = 0.15) => {
     const v = voices[s]; voices[s] = null;
-    v.g.gain.cancelScheduledValues(when); v.g.gain.setTargetAtTime(0, when, 0.15); v.src.stop(when + 1.2);
+    v.g.gain.cancelScheduledValues(when); v.g.gain.setTargetAtTime(0, when, tc); v.src.stop(when + tc * 8);
   };
+  const gateOn = (s, when, rise, dir, pr) => { pos[s] = 0; voiceOn(s, when, dir, pr, rise); };   // the head rises: the growl begins
+  const gateOff = (s, when) => voiceOff(s, when);
   // the stair light's buzz: mains hum and its harmonics with a little crackle, muffled until the door opens
   const buzzMix = new GainNode(ctx), buzzTone = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 400, Q: 0.7 });
   const buzzGain = new GainNode(ctx, { gain: 0 }), buzzPan = pan(S.light, 0.7, 1.3);
@@ -182,7 +192,7 @@ async function build(ctx, scene, ev, bufs, lv = LEVEL) {
     return frames[a].map((v, i) => v + (frames[b][i] - v) * t); };
   const fadeAt = (p) => { const f = ev.fade, i = Math.min(f.length - 2, Math.floor(p * (f.length - 1))), t = p * (f.length - 1) - i; return f[i] + (f[i + 1] - f[i]) * t; };
   const playhead = node.parameters.get('playhead');
-  let held = false, gainUser = 1, lastX = null, lastT = 0, vel = 0, rev = false, lastStep = -1;
+  let held = false, gainUser = 1, lastX = null, lastT = 0, vel = 0, rev = false, lastStep = -1, lastMove = 0, idle = 1;
   // set every parameter for scroll position x (frames) at time `when`; live = smooth toward it, offline = ramp to it
   function apply(x, when, live) {
     const set = (param, v) => { if (live) param.setTargetAtTime(v, when, 0.035); else param.linearRampToValueAtTime(v, when); };
@@ -194,7 +204,7 @@ async function build(ctx, scene, ev, bufs, lv = LEVEL) {
     if (!held) set(playhead, x / fps);
 
     // which way the swipe is going (smoothed, with hysteresis so a jittery trackpad doesn't flip it)
-    if (lastX === null) { lastX = x; lastT = when; }
+    if (lastX === null) { lastX = x; lastT = when; lastMove = when; }
     const dt = Math.max(1e-3, when - lastT), dx = x - lastX;
     vel += (dx / dt - vel) * Math.min(1, dt / 0.08);
     if (!rev && vel < -6) rev = true; else if (rev && vel > -1.5) rev = false;
@@ -207,19 +217,27 @@ async function build(ctx, scene, ev, bufs, lv = LEVEL) {
     }
     lastX = x; lastT = when;
 
-    // states: each dog's growl loops while its head is up; Asher and Mango grow quieter as you near and pass them
-    const aUp = smooth(ev.asher.up[0], ev.asher.up[1], x), mUp = smooth(ev.mango.up[0], ev.mango.up[1], x);
-    if (!held) {
-      if (aUp > 0.15 && !voices.growl) gateOn('growl', when, 0.35); else if (aUp < 0.1 && voices.growl) gateOff('growl', when);
-      if (mUp > 0.15 && !voices.mango) gateOn('mango', when, 1.4); else if (mUp < 0.1 && voices.mango) gateOff('mango', when);
-    }
-    set(loopLevel.growl.gain, 1 - 0.5 * smooth(ev.asher.up[1], ev.pass, x));
-    set(loopLevel.mango.gain, 1 - 0.6 * smooth(ev.mango.up[1], ev.pass, x));
-
     // the sinker: past Asher everything slows, blurs together and fades as you go on
     const p = SINKER_ON ? Math.max(0, Math.min(1, (x - ev.pass) / (ev.end - ev.pass))) : 0;
     rate = Math.pow(2, -SINK_SEMIS * Math.pow(p, 1.3) / 12);
-    for (const s in voices) if (voices[s]) set(voices[s].src.playbackRate, rate);
+
+    // states: each dog's growl loops while its head is up, forward at natural speed, backward at the speed you slide
+    const dir = rev ? -1 : 1, pr = rev ? Math.max(0.25, Math.min(3, -vel / fps)) * rate : rate;
+    for (const s in voices) { const v = voices[s]; if (v) pos[s] = (pos[s] + v.dir * v.pr * dt) % loopBuf[s].L; }
+    const aUp = smooth(ev.asher.up[0], ev.asher.up[1], x), mUp = smooth(ev.mango.up[0], ev.mango.up[1], x);
+    if (!held) {
+      if (aUp > 0.15 && !voices.growl) gateOn('growl', when, 0.35, dir, pr); else if (aUp < 0.1 && voices.growl) gateOff('growl', when);
+      if (mUp > 0.15 && !voices.mango) gateOn('mango', when, 1.4, dir, pr); else if (mUp < 0.1 && voices.mango) gateOff('mango', when);
+      for (const s in voices) if (voices[s] && voices[s].dir !== dir) { voiceOff(s, when, 0.025); voiceOn(s, when, dir, pr, 0.06); }   // turn the record around
+    }
+    for (const s in voices) if (voices[s]) { set(voices[s].src.playbackRate, pr); voices[s].pr = pr; }
+    // pause for a second and the growling fades out (over ~0.9 s); it comes back as soon as you move
+    if (Math.abs(vel) > 0.5) lastMove = when;
+    const idleTo = 1 - smooth(1.0, 1.9, when - lastMove);
+    idle = idleTo < idle ? idleTo : idle + (idleTo - idle) * Math.min(1, dt / 0.25);
+    // Asher and Mango also grow quieter as you near and pass them
+    set(loopLevel.growl.gain, idle * (1 - 0.5 * smooth(ev.asher.up[1], ev.pass, x)));
+    set(loopLevel.mango.gain, idle * (1 - 0.6 * smooth(ev.mango.up[1], ev.pass, x)));
     const b = smooth(0, 0.55, p), F = p >= 1 ? 0 : Math.pow(10, fadeAt(p) / 20);
     set(dry.gain, 1 - 0.75 * b); set(blurSend.gain, 1.1 * b); set(blurTone.frequency, lerp(5000, 500, p));
     const f = PULSE_HZ * rate, br = 0.7 * Math.pow(1 - p, 1.3);
@@ -230,7 +248,7 @@ async function build(ctx, scene, ev, bufs, lv = LEVEL) {
     const open = smooth(scene.door_swing[0], scene.door_swing[1], x);
     set(buzzGain.gain, lv.buzz * (0.25 + 0.75 * open)); set(buzzTone.frequency, lerp(420, 1500, open) * Math.max(0.3, rate));
     oscs.forEach((o, i) => set(o.frequency, BUZZ_F[i] * rate)); set(crackle.frequency, 3200 * rate);
-    stats.reverse = rev; stats.sink = +p.toFixed(3);
+    stats.reverse = rev; stats.sink = +p.toFixed(3); stats.dogs = +idle.toFixed(2);
     set(master.gain, gainUser * (1 - smooth(352, 369, x)) * F);
   }
   return {
@@ -262,14 +280,15 @@ function fetchAll() {
 async function decode(ctx) { const out = {}; await Promise.all(FILES.map(async (s, i) => { out[s] = await ctx.decodeAudioData(raw.abs[i].slice(0)); })); return out; }
 
 // ---- live -----------------------------------------------------------------------------------------------------------
-const stats = { enabled: !OFF, state: 'idle', error: null, muted: false, shots: 0, reverse: false, sink: 0 };
-let ctx = null, graph = null, starting = null, lastX = 0, muted = false, ended = false;
+const stats = { enabled: !OFF, state: 'idle', error: null, muted: true, shots: 0, reverse: false, sink: 0, dogs: 1 };
+let ctx = null, graph = null, starting = null, lastX = 0, muted = true, ended = false;   // off until the speaker button
 const btn = document.getElementById('sound-toggle');
 async function start() {
   if (OFF || ended) return;
   if (starting) return starting;
   starting = (async () => {
     ctx = new AC({ latencyHint: 'interactive' });
+    ctx.resume().catch(() => {});                    // still inside the button's click: iOS needs the resume here
     stats.state = 'loading';
     await fetchAll(); if (!raw) { stats.state = 'unavailable'; return; }
     const bufs = await decode(ctx);
@@ -281,21 +300,43 @@ async function start() {
   })().catch((e) => { stats.error = String(e); stats.state = 'failed'; });
   return starting;
 }
-function unlock() {
-  if (ended) return;
-  if (ctx && ctx.state !== 'running') ctx.resume().then(() => (stats.state = ctx.state));
-  else if (!ctx && !muted) start();
+// iPhones: Web Audio normally follows the ringer switch. Once the visitor turns sound on, ask for media playback (the
+// Audio Session API where it exists) and keep a silent <audio> element looping, which puts the page in the same
+// playback mode on older iOS, so the intro plays even on silent. Both are released when sound is turned off or ends.
+let keeper = null;
+function silentWav() {
+  const sr = 8000, n = sr / 2, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), w = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+function playThroughSilent(on) {
+  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'playback' : 'auto'; } catch (e) {}
+  try {
+    if (on) {
+      if (!keeper) { keeper = new Audio(silentWav()); keeper.loop = true; keeper.setAttribute('playsinline', ''); keeper.setAttribute('aria-hidden', 'true'); }
+      const p = keeper.play(); if (p && p.catch) p.catch(() => {});
+    } else if (keeper) keeper.pause();
+  } catch (e) {}
 }
 function setMuted(m) {
   muted = stats.muted = m;
-  if (btn) { btn.setAttribute('aria-pressed', String(!m)); btn.setAttribute('aria-label', m ? 'Sound off' : 'Sound on'); btn.classList.toggle('off', m); }
+  if (btn) { btn.setAttribute('aria-pressed', String(!m)); btn.setAttribute('aria-label', m ? 'Turn sound on' : 'Turn sound off'); btn.classList.toggle('off', m); }
+  if (ended) return;
+  playThroughSilent(!m);
+  if (!m) { if (!ctx) start(); else if (ctx.state !== 'running') ctx.resume().then(() => (stats.state = ctx.state)).catch(() => {}); }
   if (graph) graph.setUser(m ? 0 : 1, ctx.currentTime);
-  if (!m) unlock();
 }
+// a tap or key press elsewhere never starts sound; while it is off, the first one (or the first wheel) pulses the
+// speaker button once as an invitation. If the system suspends sound while it is on (a call, say), a tap resumes it.
 const gestureEvents = ['pointerdown', 'touchend', 'keydown'];
-function onGesture(e) { if (e.target === btn || (btn && btn.contains(e.target))) return; if (!muted) unlock(); if (ctx && ctx.state === 'running') gestureEvents.forEach((t) => removeEventListener(t, onGesture, true)); }
 let invited = false;
-function onWheelInvite() { if (invited || ctx || muted || !btn) return; invited = true; btn.classList.add('invite'); setTimeout(() => btn.classList.remove('invite'), 2600); }
+function invite() { if (invited || !btn || !muted) return; invited = true; btn.classList.add('invite'); setTimeout(() => btn.classList.remove('invite'), 2600); }
+function onGesture(e) {
+  if (btn && (e.target === btn || btn.contains(e.target))) return;
+  if (muted) invite(); else if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+}
+const onWheelInvite = () => invite();
 
 window.NolfeIntroAudio = {
   get stats() { return Object.assign({}, stats, { ctx: ctx ? ctx.state : null }); },
@@ -306,7 +347,7 @@ window.NolfeIntroAudio = {
     if (ended) return; ended = true;
     gestureEvents.forEach((t) => removeEventListener(t, onGesture, true)); removeEventListener('wheel', onWheelInvite, true);
     if (graph && ctx.state === 'running') graph.fadeOut(Math.min(0.6, afterMs / 1000));
-    setTimeout(() => { try { ctx && ctx.close(); } catch (e) {} if (btn) btn.remove(); }, afterMs + 100);
+    setTimeout(() => { try { ctx && ctx.close(); } catch (e) {} playThroughSilent(false); if (btn) btn.remove(); }, afterMs + 100);
   },
   // offline render for previews: `path` is [[seconds, frame], ...] (default: a straight walk at real time)
   async renderOffline({ path = null, sampleRate = 48000, tail = 1.5, solo = null } = {}) {
@@ -323,7 +364,7 @@ window.NolfeIntroAudio = {
   },
 };
 if (!OFF) {
-  if (btn) { btn.hidden = false; btn.addEventListener('click', (e) => { e.stopPropagation(); setMuted(!muted); if (!muted) start(); }); }
+  if (btn) { btn.hidden = false; setMuted(true); btn.addEventListener('click', (e) => { e.stopPropagation(); setMuted(!muted); }); }
   gestureEvents.forEach((t) => addEventListener(t, onGesture, true));
   addEventListener('wheel', onWheelInvite, { capture: true, passive: true });
 } else if (btn) btn.remove();
