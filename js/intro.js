@@ -11,6 +11,7 @@
 'use strict';
 const Entry = window.NolfeEntry;
 const TB = () => window.NolfeTimeBlock;
+const AUD = () => window.NolfeIntroAudio;
 const Q = new URLSearchParams(location.search);
 const CFG = Object.assign({ base: 'intro/', mode: 'seq', format: 'jpg' }, window.NOLFE_INTRO_CONFIG || {});
 const MODE = Q.get('intro') || CFG.mode;
@@ -190,6 +191,7 @@ function tick(now) {
   if (!crossingStarted && !REDUCED) stateFor(now);
   else if (REDUCED && !crossingStarted && !hint.classList.contains('on') && S.firstPaint != null) hint.classList.add('on');
   wantDecoded(); render(); updateGrain(); updateLift(now);
+  const au = AUD(); if (au) au.frame(x);
   if (DEBUG) hud(now);
   requestAnimationFrame(tick);
 }
@@ -215,6 +217,7 @@ function cross() {
   const v0 = Math.max(0, vel) * man.camera.ddPerFrameAtHandoff;      // viewer units per second (negative = closer)
   S.crossV0 = v0; S.crossedAt = performance.now() - S.t0;
   Entry.set('CROSSING', { via: 'journey' });
+  const au = AUD(); if (au) au.end(900);
   TB().cross({ d0: handoffDistanceAt(x), v0, f0: displayedFocal() });
   cutAt = performance.now();
   root.classList.add('leaving');                                      // 140 ms crossfade at the lift's peak
@@ -222,6 +225,7 @@ function cross() {
 }
 function skip(via, fadeMs) {
   if (crossingStarted) return; crossingStarted = true;
+  const au = AUD(); if (au) au.end(fadeMs || 0);
   Entry.set('CROSSING', { via });
   const tb = TB(); if (tb) tb.enterNow(); else Entry.set('INSIDE');
   if (!fadeMs) { teardown(); return; }
@@ -253,6 +257,7 @@ function warp() {
   LM = document.createElement('canvas'); LM.width = lw; LM.height = lh; lmx = LM.getContext('2d', { willReadFrequently: true });
   SB = document.createElement('canvas'); SB.width = lw; SB.height = lh; sbx = SB.getContext('2d');
   const tb = TB(); if (tb) tb.preload();
+  const au = AUD(); if (au) au.warp(WARP_MS);
 }
 function warpDecode(i) {
   let j = -1;
@@ -388,7 +393,8 @@ function unlockVideo() {      // iOS paints seeked frames reliably once the elem
 // ---- boot ---------------------------------------------------------------------------------------------
 function onFirstPaint() {
   setTimeout(() => { if (alive && !crossingStarted && performance.now() - lastInput > 600) hint.classList.add('on'); }, 700);
-  setTimeout(() => { if (alive) skipBtn.classList.add('on'); }, 1400);
+  setTimeout(() => { if (alive) { skipBtn.classList.add('on'); const sb = document.getElementById('sound-toggle'); if (sb) sb.classList.add('on'); } }, 1400);
+  setTimeout(() => { const au = AUD(); if (au && alive) au.load(); }, 1800);
   setTimeout(() => { const tb = TB(); if (tb && alive) tb.preload(); }, 2500);
 }
 async function boot() {
