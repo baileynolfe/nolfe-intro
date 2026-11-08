@@ -7,9 +7,15 @@
 const Entry = window.NolfeEntry;                                                   // [intro]
 const SHEETS = window.NOLFE_TB_SHEETS.trail, HD_SHEETS = window.NOLFE_TB_SHEETS.hd; // [intro] URLs moved to timeblock-sheets.js
 const N=1222,FW=640,FH=480,COLS=6,PER=48;
-const HW=1280,HH=960,HCOLS=3,HPER=12,HD_KEEP=12;
-const sheetCache=new Map();
-function sheet(i){if(!sheetCache.has(i))sheetCache.set(i,new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=SHEETS[i]}));return sheetCache.get(i)}
+// [intro] Memory: phones and tablets (coarse pointer) count GPU textures against the page's own memory budget, and run
+// out sooner. They keep fewer textures; everyone releases decoded sprite sheets (3840x3840, ~59 MB each) once unused.
+const COARSE=matchMedia('(pointer:coarse)').matches;
+const HW=1280,HH=960,HCOLS=3,HPER=12,HD_KEEP=COARSE?8:12,TEX_CAP=COARSE?96:180,SHEET_IDLE_MS=2500;
+const sheetCache=new Map(),sheetUsed=new Map();
+function sheet(i){sheetUsed.set(i,performance.now());if(!sheetCache.has(i))sheetCache.set(i,new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=SHEETS[i]}));return sheetCache.get(i)}
+// [intro] A decoded sheet is only needed while its frames are being cut into textures: drop the ones nothing has used
+// for a moment (the frames already cut stay on the GPU; a sheet needed again is re-read from the HTTP cache).
+setInterval(()=>{const now=performance.now();for(const [i,t] of sheetUsed)if(now-t>SHEET_IDLE_MS&&!pending.size){const p=sheetCache.get(i);sheetCache.delete(i);sheetUsed.delete(i);if(p)p.then(im=>{im.src=''},()=>{})}},1000);
 const cut=document.createElement('canvas');cut.width=FW;cut.height=FH;const cutCtx=cut.getContext('2d');
 function frameCanvas(n,im){const k=n%PER;cutCtx.clearRect(0,0,FW,FH);cutCtx.drawImage(im,(k%COLS)*FW,Math.floor(k/COLS)*FH,FW,FH,0,0,FW,FH);return cut}
 const canvas=document.querySelector('#tb'),still=document.querySelector('#still');  // [intro] canvas has an id now
@@ -152,7 +158,7 @@ for(const q of planes.filter(q=>q.anchor>=0)){load(q.pair.a);if(q.pair.mix>0)loa
 const settled=Math.abs(target-position)<1.5&&!gliding;const hdKeep=new Set();for(const q of planes)if(q.anchor>=0){hdKeep.add(q.pair.a);hdKeep.add(q.pair.b);if(settled){hdLoad(q.pair.a);if(q.pair.mix>0)hdLoad(q.pair.b)}}
 for(const [n,t] of hdCache)if(!hdKeep.has(n)&&hdCache.size>HD_KEEP){gl.deleteTexture(t);hdCache.delete(n)}
 const pick=(n,front)=>(front&&hdCache.get(n))||cache.get(n);
-const keep=new Set();for(const q of planes){keep.add(q.pair.a);keep.add(q.pair.b)}for(const [n,t] of cache)if(!keep.has(n)&&cache.size>180){gl.deleteTexture(t);cache.delete(n)}
+const keep=new Set();for(const q of planes){keep.add(q.pair.a);keep.add(q.pair.b)}for(const [n,t] of cache)if(!keep.has(n)&&cache.size>TEX_CAP){gl.deleteTexture(t);cache.delete(n)}
 gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);const aspect=canvas.width/canvas.height;
 // Wider front framing preserves the original aspect ratio; side view exposes a long time ribbon.
 let distance=Math.max(2.35,2.5/aspect)+pull*4.5,focal=F60;
@@ -209,7 +215,7 @@ canvas.addEventListener('pointerdown',()=>{if(inside())chromeHeld=true});
 canvas.addEventListener('pointermove',()=>{if(chromeHeld&&drag&&drag.axis)hideChrome()});
 for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>{chromeHeld=false;if(!chromeShown){clearTimeout(chromeTimer);chromeTimer=setTimeout(revealChrome,300)}});
 addEventListener('keydown',e=>{if(inside()&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Escape'].includes(e.key))hideChrome()});
-canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();running=false;still.style.visibility='visible'});canvas.addEventListener('webglcontextrestored',()=>location.reload());
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();running=false;still.style.visibility='visible'});canvas.addEventListener('webglcontextrestored',()=>{try{history.replaceState(history.state,'',location.pathname+location.search+'#inside')}catch(e){}location.reload()});   // [intro] reopen inside, not at the door (no new history entry)
 
 // In-frame site navigation (production #nolfe-overlay). [intro] Hidden by CSS until INSIDE, then behaves as before.
 (()=>{const o=document.getElementById('nolfe-overlay'),c=canvas;if(!o)return;let timer,held=false;

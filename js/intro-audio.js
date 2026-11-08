@@ -339,15 +339,16 @@ function onGesture(e) {
 const onWheelInvite = () => invite();
 
 window.NolfeIntroAudio = {
-  get stats() { return Object.assign({}, stats, { ctx: ctx ? ctx.state : null }); },
-  load() { if (!OFF) fetchAll(); },
-  frame(x) { lastX = x; if (graph && ctx.state === 'running') graph.apply(x, ctx.currentTime, true); },
+  get stats() { return Object.assign({}, stats, { ctx: ctx ? ctx.state : (ended ? 'closed' : null) }); },
+  load() { if (!OFF && !ended) fetchAll(); },
+  frame(x) { lastX = x; if (graph && ctx && ctx.state === 'running') graph.apply(x, ctx.currentTime, true); },
   warp(ms) { if (graph) graph.warp(ms); this.end(ms + 250); },
   end(afterMs = 700) {
     if (ended) return; ended = true;
     gestureEvents.forEach((t) => removeEventListener(t, onGesture, true)); removeEventListener('wheel', onWheelInvite, true);
     if (graph && ctx.state === 'running') graph.fadeOut(Math.min(0.6, afterMs / 1000));
-    setTimeout(() => { try { ctx && ctx.close(); } catch (e) {} playThroughSilent(false); if (btn) btn.remove(); }, afterMs + 100);
+    setTimeout(() => { try { ctx && ctx.close(); } catch (e) {} playThroughSilent(false); if (btn) btn.remove();
+      graph = null; raw = null; loading = null; ctx = null; }, afterMs + 100);   // let the decoded sound go once it's over
   },
   // offline render for previews: `path` is [[seconds, frame], ...] (default: a straight walk at real time)
   async renderOffline({ path = null, sampleRate = 48000, tail = 1.5, solo = null } = {}) {

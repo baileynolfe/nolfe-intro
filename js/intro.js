@@ -426,7 +426,10 @@ async function boot() {
     .then((r) => { if (!r.ok) throw Error('HTTP ' + r.status); return r.json(); });
   manifestP.catch(() => {});
   const [enteredBefore, webpOk] = await Promise.all([Entry.askParent(350), FORMAT === 'webp' ? canWebp() : true]);
-  if (enteredBefore) return skip('return', 0);
+  // the time block lost its graphics context and reloaded the page to rebuild it: come straight back inside
+  const resumed = location.hash === '#inside';
+  if (resumed) try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {}
+  if (enteredBefore || resumed) return skip('return', 0);
   // A late answer from the parent (its page code loaded after us) still counts until the visitor starts walking.
   const lateAnswer = (e) => { const d = e.data; if (d && d.nolfe === 'entry-state' && d.entered && !lastInput && !crossingStarted) skip('return', 250); };
   addEventListener('message', lateAnswer); setTimeout(() => removeEventListener('message', lateAnswer), 2500);
