@@ -1,16 +1,19 @@
 /* Nolfe — entrance sound.
-   The intro's sounds are laid on its timeline as stems (door, steps, Asher's growls, Mango's long growl). The scroll position is the playhead: an
-   AudioWorklet reads every stem at the playhead, so sliding forward plays them forward, sliding back plays them
-   backward, sliding faster raises their pitch and stopping goes quiet. Each sound lives where its source is in the
-   scene (the door, the stair light's buzz, Asher's and Mango's heads; footsteps under your feet) and the listener rides the
-   camera's path through HRTF panners, so sounds pan and fall away as you move past them. From the first glow of
-   golden light everything vibrates slower and slower: the growls slow like a tape losing power until their pulses are
-   single throbs and then sub-sound, the hum sinks with them, and the sinker (a bass synth that is the growls' own pulse
-   made solid) rises out of them and sinks along. Everything decrescendos together along the curve of the owner's
-   reference recording and is silent before the threshold.
-   Browsers only allow sound after a tap, click or key press: it starts with the first one (a phone swipe counts, a
-   scroll wheel doesn't) and the speaker button mutes it. ?sound=off disables it. Off with reduced motion.
-   The same graph also renders offline (NolfeIntroAudio.renderOffline) for previews. */
+   Each sound is driven the way it behaves in the space:
+   * Events, tied to the swipe. The door and each footstep fire as one-shots at their natural speed when you slide
+     forward past them, so going forward always sounds natural, however fast or jerky the scroll. Sliding backward
+     scrubs the same sounds in reverse at the speed you slide: the DJ-scratch blend.
+   * States, in real time. The stair light's buzz is synthesized live (muffled until the door opens). Each dog's growl
+     loops at its natural speed while its head is up: it begins as the head rises and stops if you scroll back until it
+     lowers.
+   * The sinker. Once you pass Asher a live bass drone on the growls' own pulse rises, every sound starts to slow (the
+     growls, the buzz, the footsteps) and the room blurs into a long dark wash: the further you swipe, the more
+     everything blends together and fades, along the curve of the owner's reference recording, silent at the threshold.
+   Sounds live where their sources are (HRTF panners; the listener rides the camera's path). Browsers only allow sound
+   after a tap, click or key press: it starts with the first one (a phone swipe counts, a scroll wheel doesn't) and the
+   speaker button mutes it. ?sound=off disables it; off with reduced motion.
+   Test switches: ?verb=0.22 sets the room reverb send (default 0.11), ?sinker=off leaves out the sinker.
+   The same graph renders offline (NolfeIntroAudio.renderOffline) for previews. Assets: tools/build_audio.py. */
 (function () {
 'use strict';
 const Q = new URLSearchParams(location.search);
@@ -18,8 +21,15 @@ const CFG = Object.assign({ base: 'intro/' }, window.NOLFE_INTRO_CONFIG || {});
 const AC = window.AudioContext || window.webkitAudioContext;
 const REDUCED = Q.get('motion') === 'reduce' || matchMedia('(prefers-reduced-motion: reduce)').matches;
 const OFF = Q.get('sound') === 'off' || REDUCED || !AC || !window.AudioWorkletNode;
-const STEMS = ['door', 'steps', 'growl', 'mango', 'sinker'];
-const LEVEL = { door: 0.55, steps: 0.3, growl: 0.24, mango: 0.24, sinker: 0.6, buzz: 0.06 };
+const STEMS = ['door', 'steps'];                                   // scrubbed: heard only while sliding backward
+const LOOPS = { growl: 'asher_loop', mango: 'mango_loop' };        // real time, while each dog's head is up
+const FILES = [...STEMS, 'kit', ...Object.values(LOOPS)];
+const LEVEL = { door: 0.55, steps: 0.3, growl: 0.24, mango: 0.24, sinker: 0.022, buzz: 0.06 };
+const ROOM_VERB = Q.has('verb') ? Math.max(0, +Q.get('verb') || 0) : 0.11;   // room reverb send (was 0.22)
+const SINKER_ON = Q.get('sinker') !== 'off';
+const SINK_SEMIS = 24, PULSE_HZ = 52;                              // how far everything slows; the growls' own pulse
+const STEP_GAP = 0.14;                                             // footsteps never closer than this (a fast swipe)
+const BUZZ_F = [60, 120, 180, 240, 360];
 const smooth = (a, b, v) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
 const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -61,50 +71,60 @@ let workletUrl = null;
 const wurl = () => workletUrl || (workletUrl = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
 
 // ---- the graph (live or offline) ------------------------------------------------------------------------------------
-async function build(ctx, scene, bufs, lv = LEVEL) {
+async function build(ctx, scene, ev, bufs, lv = LEVEL) {
   await ctx.audioWorklet.addModule(wurl());
   const node = new AudioWorkletNode(ctx, 'nolfe-scrub', { numberOfInputs: 0, numberOfOutputs: STEMS.length, outputChannelCount: STEMS.map(() => 1) });
   node.port.postMessage(STEMS.map((s) => bufs[s].getChannelData(0)));
-  const S = scene.sources;
+  const S = scene.sources, t0 = ctx.currentTime;
   const pan = (pos, ref, roll) => new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: ref, rolloffFactor: roll,
     maxDistance: 60, positionX: pos[0], positionY: pos[1], positionZ: pos[2] });
   const bus = new GainNode(ctx), dry = new GainNode(ctx), wet = new GainNode(ctx, { gain: 0 }), master = new GainNode(ctx, { gain: 0 });
-  // distance falloff is gentle for Asher (a presence in the room, not louder as you get close)
+  // where each sound lives; distance falloff is gentle for the dogs (a presence in the room, not louder as you get close)
   const pans = { door: pan(S.door, 1.2, 0.9), steps: pan([0, 0, 0], 0.8, 0.6), growl: pan(S.asher, 3.0, 0.45), mango: pan(S.mango, 3.0, 0.45) };
   pans.steps.panningModel = 'equalpower';            // HRTF straight below the listener sounded metallic
-  // per-element cleanup: take the phone mic's boom out of the steps and growl, keep the wood and the throat
+  // per-element cleanup: take the phone mic's boom out of the steps and growls, keep the wood and the throat
   const eq = (...fs) => { const nodes = fs.map(([type, frequency, Q, gain]) => new BiquadFilterNode(ctx, { type, frequency, Q, gain: gain || 0 }));
     nodes.reduce((a, b) => (a.connect(b), b)); return [nodes[0], nodes[nodes.length - 1]]; };
   const chains = { door: eq(['highpass', 70, 0.7]), steps: eq(['highpass', 95, 0.7], ['peaking', 300, 1.0, -3], ['lowpass', 6500, 0.5]),
     growl: eq(['highpass', 70, 0.7], ['peaking', 260, 0.9, -3], ['lowpass', 3400, 0.6]),
     mango: eq(['highpass', 80, 0.7], ['peaking', 260, 0.9, -3], ['lowpass', 3600, 0.6]) };
-  // the sinker is the growls' own pulse made solid (tools/build_sinker.py): it starts where the dogs are and, as it sinks,
-  // spreads out until it is all around you
-  const sinkerOut = new GainNode(ctx, { gain: lv.sinker });
-  const D = S.asher.map((v, i) => (v + S.mango[i]) / 2), sinkPlaced = new GainNode(ctx), sinkAround = new GainNode(ctx, { gain: 0 });
-  const sinkMaster = new GainNode(ctx, { gain: 0 });
-  sinkerOut.connect(pan(D, 3.0, 0.45)).connect(sinkPlaced).connect(sinkMaster); sinkerOut.connect(sinkAround).connect(sinkMaster);
-  STEMS.forEach((s, i) => { if (s === 'sinker') { node.connect(new BiquadFilterNode(ctx, { type: 'highpass', frequency: 24, Q: 0.7 }), i).connect(sinkerOut); return; }
-    const [a, b] = chains[s]; node.connect(a, i); b.connect(pans[s]);
-    pans[s].connect(new GainNode(ctx, { gain: lv[s] })).connect(bus); });
+  for (const s in chains) { chains[s][1].connect(pans[s]); pans[s].connect(new GainNode(ctx, { gain: lv[s] })).connect(bus); }
+
+  // events: one-shots at natural speed going forward; the reverse scrub of the same sounds, opened only going backward
+  const scrub = {};
+  STEMS.forEach((s, i) => { scrub[s] = new GainNode(ctx, { gain: 0 }); node.connect(scrub[s], i).connect(chains[s][0]); });
+  let rate = 1;                                      // the sinker's slowing: 1 = natural speed
+  const shot = (s, k, when) => {
+    const [o, d] = ev.kit[k], src = new AudioBufferSourceNode(ctx, { buffer: bufs.kit, playbackRate: rate });
+    src.connect(chains[s][0]); src.start(when, o, d); stats.shots++;
+  };
+
+  // states: each dog's growl loops at natural speed while its head is up
+  const loopLevel = { growl: new GainNode(ctx), mango: new GainNode(ctx) }, voices = { growl: null, mango: null };
+  for (const s in loopLevel) loopLevel[s].connect(chains[s][0]);
+  const gateOn = (s, when, rise) => {
+    const src = new AudioBufferSourceNode(ctx, { buffer: bufs[LOOPS[s]], loop: true, playbackRate: rate }), g = new GainNode(ctx, { gain: 0 });
+    src.connect(g).connect(loopLevel[s]); g.gain.setValueAtTime(0, when); g.gain.setTargetAtTime(1, when, rise / 3); src.start(when);
+    voices[s] = { src, g };
+  };
+  const gateOff = (s, when) => {
+    const v = voices[s]; voices[s] = null;
+    v.g.gain.cancelScheduledValues(when); v.g.gain.setTargetAtTime(0, when, 0.15); v.src.stop(when + 1.2);
+  };
   // the stair light's buzz: mains hum and its harmonics with a little crackle, muffled until the door opens
-  const t0 = ctx.currentTime;
   const buzzMix = new GainNode(ctx), buzzTone = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 400, Q: 0.7 });
   const buzzGain = new GainNode(ctx, { gain: 0 }), buzzPan = pan(S.light, 0.7, 1.3);
-  const oscs = [[60, 'sine', 0.3], [120, 'sine', 0.3], [180, 'sine', 0.16], [240, 'sine', 0.08], [360, 'sine', 0.04]].map(([f, type, g]) => {
-    const o = new OscillatorNode(ctx, { frequency: f, type }); o.connect(new GainNode(ctx, { gain: g })).connect(buzzMix); o.start(t0); return o;
+  const oscs = [0.3, 0.3, 0.16, 0.08, 0.04].map((g, i) => {
+    const o = new OscillatorNode(ctx, { frequency: BUZZ_F[i], type: 'sine' }); o.connect(new GainNode(ctx, { gain: g })).connect(buzzMix); o.start(t0); return o;
   });
   const noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), nd = noise.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * (Math.random() < 0.02 ? 1 : 0.25);   // hum with a little crackle
   const nsrc = new AudioBufferSourceNode(ctx, { buffer: noise, loop: true });
   const crackle = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 3200, Q: 1.2 });
-  nsrc.connect(crackle).connect(new GainNode(ctx, { gain: 0.05 })).connect(buzzMix);
-  nsrc.start(t0);
+  nsrc.connect(crackle).connect(new GainNode(ctx, { gain: 0.05 })).connect(buzzMix); nsrc.start(t0);
   buzzMix.connect(buzzTone).connect(buzzGain).connect(buzzPan).connect(bus);
-  // the collapse: a narrowing band through a tuned resonance (a feedback comb); used by "Skip intro"'s half-second warp
-  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 900, Q: 0.6 });
-  const comb = new DelayNode(ctx, { delayTime: 1 / 170, maxDelayTime: 0.05 }), fb = new GainNode(ctx, { gain: 0 });
-  // warmth without mud: light tape-style saturation, sub rumble cleared, a dip in the 'mud' band, a gently rounded top
+
+  // the room: warmth without mud (light tape saturation, sub rumble cleared, a dip in the mud band, a rounded top)
   const sat = new WaveShaperNode(ctx, { oversample: '2x' }), curve = new Float32Array(1024);
   for (let i = 0; i < curve.length; i++) { const x = i / (curve.length - 1) * 2 - 1; curve[i] = Math.tanh(1.15 * x) / Math.tanh(1.15); }
   sat.curve = curve;
@@ -114,29 +134,55 @@ async function build(ctx, scene, bufs, lv = LEVEL) {
   const warm = new GainNode(ctx);
   bus.connect(new GainNode(ctx, { gain: 0.9 })).connect(sat).connect(sub).connect(body).connect(soft).connect(warm);
   warm.connect(dry).connect(master);
+  // "Skip intro"'s half-second warp: everything squeezed through a narrowing band and a tuned resonance (a feedback comb)
+  const band = new BiquadFilterNode(ctx, { type: 'bandpass', frequency: 900, Q: 0.6 });
+  const comb = new DelayNode(ctx, { delayTime: 1 / 170, maxDelayTime: 0.05 }), fb = new GainNode(ctx, { gain: 0 });
   warm.connect(band); band.connect(comb); comb.connect(fb).connect(comb); band.connect(wet); comb.connect(wet); wet.connect(master);
-  const comp = new DynamicsCompressorNode(ctx, { threshold: -26, knee: 10, ratio: 2, attack: 0.03, release: 0.35 });   // glue, not grab
-  // a little room: short, warm, wooden (a generated impulse response, damped highs, ~1.6 s)
-  const verb = new ConvolverNode(ctx, { buffer: roomIR(ctx, 1.6, 0.018) }), verbSend = new GainNode(ctx, { gain: 0.22 });
+
+  // the sinker: a bass drone on the growls' own pulse (a clean sub that owns the fundamental, and an analog texture of
+  // two detuned saws, harmonics only, through a resonant low-pass), slowing with everything else. It starts where the
+  // dogs are and spreads out around you.
+  const dSub = new OscillatorNode(ctx, { type: 'sine', frequency: PULSE_HZ });
+  const sawA = new OscillatorNode(ctx, { type: 'sawtooth', frequency: PULSE_HZ, detune: -6 }), sawB = new OscillatorNode(ctx, { type: 'sawtooth', frequency: PULSE_HZ, detune: 6 });
+  const texHP = new BiquadFilterNode(ctx, { type: 'highpass', frequency: PULSE_HZ * 1.5, Q: 0.7 });
+  const texLP = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: PULSE_HZ * 8, Q: 4 });
+  const droneMix = new GainNode(ctx), droneGain = new GainNode(ctx, { gain: 0 });
+  dSub.connect(new GainNode(ctx, { gain: 0.6 })).connect(droneMix);
+  sawA.connect(texHP); sawB.connect(texHP); texHP.connect(texLP).connect(new GainNode(ctx, { gain: 0.35 })).connect(droneMix);
+  droneMix.connect(droneGain);
+  [dSub, sawA, sawB].forEach((o) => o.start(t0));
+  const dogs = S.asher.map((v, i) => (v + S.mango[i]) / 2), droneHere = new GainNode(ctx), droneAround = new GainNode(ctx, { gain: 0 });
+  droneGain.connect(pan(dogs, 3.0, 0.45)).connect(droneHere).connect(master); droneGain.connect(droneAround).connect(master);
+  // the blur: the room (and the drone) sent into a long, dark, diffuse wash through a slowly wavering smear, so the sounds
+  // run into each other; the further past Asher, the more of it
+  const blurSend = new GainNode(ctx, { gain: 0 }), smear = new GainNode(ctx);
+  for (const [ms, hz] of [[23, 0.13], [37, 0.21]]) {
+    const dl = new DelayNode(ctx, { delayTime: ms / 1000, maxDelayTime: 0.1 }), lfo = new OscillatorNode(ctx, { frequency: hz });
+    lfo.connect(new GainNode(ctx, { gain: 0.006 })).connect(dl.delayTime); lfo.start(t0);
+    blurSend.connect(dl).connect(smear); dl.connect(new GainNode(ctx, { gain: 0.35 })).connect(dl);
+  }
+  blurSend.connect(smear);
+  const blur = new ConvolverNode(ctx, { buffer: roomIR(ctx, 6.0, 0.06, 1.1, 0.85) });
+  const blurTone = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 5000, Q: 0.5 });
+  smear.connect(blur).connect(blurTone).connect(master);
+  warm.connect(blurSend); droneGain.connect(blurSend);
+
+  // a little room (lowered: send 0.11, was 0.22), then glue
+  const comp = new DynamicsCompressorNode(ctx, { threshold: -26, knee: 10, ratio: 2, attack: 0.03, release: 0.35 });
+  const verb = new ConvolverNode(ctx, { buffer: roomIR(ctx, 1.6, 0.018) }), verbSend = new GainNode(ctx, { gain: ROOM_VERB });
   const verbHP = new BiquadFilterNode(ctx, { type: 'highpass', frequency: 220, Q: 0.6 }), verbLP = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: 6000, Q: 0.6 });
   const out = new GainNode(ctx, { gain: 1.0 });
   master.connect(out); master.connect(verbSend).connect(verbHP).connect(verbLP).connect(verb).connect(out);
-  // the sinker skips the room's saturation and opens into a long, dark, slowly-dying space: the silent fourth dimension
-  const voidVerb = new ConvolverNode(ctx, { buffer: roomIR(ctx, 5.0, 0.04, 1.3, 0.8) });
-  sinkMaster.connect(out); sinkMaster.connect(new GainNode(ctx, { gain: 0.3 })).connect(voidVerb).connect(out);
-  const mains = [master, sinkMaster];
   out.connect(comp).connect(ctx.destination);
+
   const L = ctx.listener;
   const lp = L.positionX ? [L.positionX, L.positionY, L.positionZ, L.forwardX, L.forwardY, L.forwardZ, L.upX, L.upY, L.upZ] : null;
   const fps = scene.fps, frames = scene.listener, n = frames.length;
-  // the tail (tools/build_sinker.py): from the first golden glow everything vibrates slower and decrescendos together.
-  // The stems carry it already; the live hum follows the same per-frame rate and fade.
-  const T = scene.tail || null, tf = (arr, fx) => { if (!arr) return 1; const a = Math.max(0, Math.min(arr.length - 1, Math.floor(fx))), b = Math.min(arr.length - 1, a + 1); return arr[a] + (arr[b] - arr[a]) * Math.max(0, Math.min(1, fx - a)); };
-  const glowF = T ? T.glow * fps : 180, endF = T ? T.end * fps : 347;
   const at = (fx) => { const a = Math.max(0, Math.min(n - 1, Math.floor(fx))), b = Math.min(n - 1, a + 1), t = Math.max(0, Math.min(1, fx - a));
     return frames[a].map((v, i) => v + (frames[b][i] - v) * t); };
+  const fadeAt = (p) => { const f = ev.fade, i = Math.min(f.length - 2, Math.floor(p * (f.length - 1))), t = p * (f.length - 1) - i; return f[i] + (f[i + 1] - f[i]) * t; };
   const playhead = node.parameters.get('playhead');
-  let held = false, gainUser = 1;
+  let held = false, gainUser = 1, lastX = null, lastT = 0, vel = 0, rev = false, lastStep = -1;
   // set every parameter for scroll position x (frames) at time `when`; live = smooth toward it, offline = ramp to it
   function apply(x, when, live) {
     const set = (param, v) => { if (live) param.setTargetAtTime(v, when, 0.035); else param.linearRampToValueAtTime(v, when); };
@@ -146,28 +192,60 @@ async function build(ctx, scene, bufs, lv = LEVEL) {
     set(pans.steps.positionX, l[0] - l[6] * 1.1 + l[3] * 0.6); set(pans.steps.positionY, l[1] - l[7] * 1.1 + l[4] * 0.6);
     set(pans.steps.positionZ, l[2] - l[8] * 1.1 + l[5] * 0.6);
     if (!held) set(playhead, x / fps);
+
+    // which way the swipe is going (smoothed, with hysteresis so a jittery trackpad doesn't flip it)
+    if (lastX === null) { lastX = x; lastT = when; }
+    const dt = Math.max(1e-3, when - lastT), dx = x - lastX;
+    vel += (dx / dt - vel) * Math.min(1, dt / 0.08);
+    if (!rev && vel < -6) rev = true; else if (rev && vel > -1.5) rev = false;
+    for (const s of STEMS) set(scrub[s].gain, rev && !held ? 1 : 0);
+    // events: fire as you slide forward past them (a jump of more than ~1.5 s fires nothing)
+    if (dx > 0 && dx < 36 && !rev && !held) {
+      if (lastX < ev.door.f && x >= ev.door.f) shot('door', ev.door.k, when);
+      let hit = null; for (const e of ev.steps) if (lastX < e.f && x >= e.f) hit = e;
+      if (hit && when - lastStep >= STEP_GAP) { shot('steps', hit.k, when); lastStep = when; }
+    }
+    lastX = x; lastT = when;
+
+    // states: each dog's growl loops while its head is up; Asher and Mango grow quieter as you near and pass them
+    const aUp = smooth(ev.asher.up[0], ev.asher.up[1], x), mUp = smooth(ev.mango.up[0], ev.mango.up[1], x);
+    if (!held) {
+      if (aUp > 0.15 && !voices.growl) gateOn('growl', when, 0.35); else if (aUp < 0.1 && voices.growl) gateOff('growl', when);
+      if (mUp > 0.15 && !voices.mango) gateOn('mango', when, 1.4); else if (mUp < 0.1 && voices.mango) gateOff('mango', when);
+    }
+    set(loopLevel.growl.gain, 1 - 0.5 * smooth(ev.asher.up[1], ev.pass, x));
+    set(loopLevel.mango.gain, 1 - 0.6 * smooth(ev.mango.up[1], ev.pass, x));
+
+    // the sinker: past Asher everything slows, blurs together and fades as you go on
+    const p = SINKER_ON ? Math.max(0, Math.min(1, (x - ev.pass) / (ev.end - ev.pass))) : 0;
+    rate = Math.pow(2, -SINK_SEMIS * Math.pow(p, 1.3) / 12);
+    for (const s in voices) if (voices[s]) set(voices[s].src.playbackRate, rate);
+    const b = smooth(0, 0.55, p), F = p >= 1 ? 0 : Math.pow(10, fadeAt(p) / 20);
+    set(dry.gain, 1 - 0.75 * b); set(blurSend.gain, 1.1 * b); set(blurTone.frequency, lerp(5000, 500, p));
+    const f = PULSE_HZ * rate, br = 0.7 * Math.pow(1 - p, 1.3);
+    for (const o of [dSub, sawA, sawB]) set(o.frequency, f);
+    set(texHP.frequency, f * 1.5); set(texLP.frequency, f * (1.3 + 11 * br));
+    set(droneGain.gain, lv.sinker * smooth(0, 0.18, p));
+    set(droneHere.gain, 1 - smooth(0.1, 0.8, p)); set(droneAround.gain, smooth(0.1, 0.8, p));
     const open = smooth(scene.door_swing[0], scene.door_swing[1], x);
-    const rate = tf(T && T.rate, x), fade = tf(T && T.fade, x), end = 1 - smooth(352, 369, x);
-    set(buzzGain.gain, lv.buzz * (0.25 + 0.75 * open) * fade); set(buzzTone.frequency, lerp(420, 1500, open) * Math.max(0.3, rate));
-    oscs.forEach((o, i) => set(o.frequency, [60, 120, 180, 240, 360][i] * rate));   // the hum slows with everything else
-    set(crackle.frequency, 3200 * rate);
-    const around = smooth(glowF + 20, endF - 25, x);
-    set(sinkPlaced.gain, 1 - around); set(sinkAround.gain, around);
-    for (const m of mains) set(m.gain, gainUser * end);
+    set(buzzGain.gain, lv.buzz * (0.25 + 0.75 * open)); set(buzzTone.frequency, lerp(420, 1500, open) * Math.max(0.3, rate));
+    oscs.forEach((o, i) => set(o.frequency, BUZZ_F[i] * rate)); set(crackle.frequency, 3200 * rate);
+    stats.reverse = rev; stats.sink = +p.toFixed(3);
+    set(master.gain, gainUser * (1 - smooth(352, 369, x)) * F);
   }
   return {
     ctx, apply,
-    setUser(v, when) { gainUser = v; for (const m of mains) m.gain.setTargetAtTime(v, when, 0.06); },
-    // skip: hold the stems, collapse everything into the resonance and fade out over the warp
+    setUser(v, when) { gainUser = v; master.gain.setTargetAtTime(v, when, 0.06); },
+    // skip: hold everything, collapse it into the resonance and fade out over the warp
     warp(ms) {
       held = true; const now = ctx.currentTime, d = ms / 1000;
       for (const [p, v] of [[dry.gain, 0], [band.Q, 16], [fb.gain, 0.86]]) { p.cancelScheduledValues(now); p.setTargetAtTime(v, now, d * 0.25); }
       band.frequency.cancelScheduledValues(now); band.frequency.setValueAtTime(band.frequency.value, now); band.frequency.exponentialRampToValueAtTime(140, now + d);
       wet.gain.cancelScheduledValues(now); wet.gain.setValueAtTime(wet.gain.value, now); wet.gain.linearRampToValueAtTime(1.0, now + d * 0.5); wet.gain.linearRampToValueAtTime(0, now + d);
       oscs.forEach((o) => { o.frequency.cancelScheduledValues(now); o.frequency.setValueAtTime(o.frequency.value, now); o.frequency.exponentialRampToValueAtTime(o.frequency.value * 0.5, now + d); });
-      for (const m of mains) { m.gain.cancelScheduledValues(now); m.gain.setValueAtTime(m.gain.value, now); m.gain.linearRampToValueAtTime(0, now + d + 0.1); }
+      master.gain.cancelScheduledValues(now); master.gain.setValueAtTime(master.gain.value, now); master.gain.linearRampToValueAtTime(0, now + d + 0.1);
     },
-    fadeOut(s) { const now = ctx.currentTime; for (const m of mains) { m.gain.cancelScheduledValues(now); m.gain.setValueAtTime(m.gain.value, now); m.gain.linearRampToValueAtTime(0, now + s); } },
+    fadeOut(s) { const now = ctx.currentTime; master.gain.cancelScheduledValues(now); master.gain.setValueAtTime(master.gain.value, now); master.gain.linearRampToValueAtTime(0, now + s); },
   };
 }
 
@@ -176,16 +254,15 @@ let raw = null, loading = null;
 function fetchAll() {
   if (loading) return loading;
   const base = CFG.base;
-  loading = Promise.all([fetch(base + 'audio_scene.json').then((r) => r.json()),
-    fetch(base + 'audio/tail.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
-    ...STEMS.map((s) => fetch(base + 'audio/' + s + '.m4a').then((r) => { if (!r.ok) throw Error(s); return r.arrayBuffer(); }))])
-    .then(([scene, tail, ...abs]) => (raw = { scene: Object.assign(scene, { tail }), abs })).catch((e) => { stats.error = String(e); raw = null; });
+  loading = Promise.all([fetch(base + 'audio_scene.json').then((r) => r.json()), fetch(base + 'audio/events.json').then((r) => r.json()),
+    ...FILES.map((s) => fetch(base + 'audio/' + s + '.m4a').then((r) => { if (!r.ok) throw Error(s); return r.arrayBuffer(); }))])
+    .then(([scene, ev, ...abs]) => (raw = { scene, ev, abs })).catch((e) => { stats.error = String(e); raw = null; });
   return loading;
 }
-async function decode(ctx) { const out = {}; await Promise.all(STEMS.map(async (s, i) => { out[s] = await ctx.decodeAudioData(raw.abs[i].slice(0)); })); return out; }
+async function decode(ctx) { const out = {}; await Promise.all(FILES.map(async (s, i) => { out[s] = await ctx.decodeAudioData(raw.abs[i].slice(0)); })); return out; }
 
 // ---- live -----------------------------------------------------------------------------------------------------------
-const stats = { enabled: !OFF, state: 'idle', error: null, muted: false };
+const stats = { enabled: !OFF, state: 'idle', error: null, muted: false, shots: 0, reverse: false, sink: 0 };
 let ctx = null, graph = null, starting = null, lastX = 0, muted = false, ended = false;
 const btn = document.getElementById('sound-toggle');
 async function start() {
@@ -196,7 +273,7 @@ async function start() {
     stats.state = 'loading';
     await fetchAll(); if (!raw) { stats.state = 'unavailable'; return; }
     const bufs = await decode(ctx);
-    graph = await build(ctx, raw.scene, bufs);
+    graph = await build(ctx, raw.scene, raw.ev, bufs);
     graph.apply(lastX, ctx.currentTime, true);
     graph.setUser(muted ? 0 : 1, ctx.currentTime);
     if (ctx.state !== 'running') await ctx.resume();
@@ -238,7 +315,7 @@ window.NolfeIntroAudio = {
     const end = path[path.length - 1][0], dur = end + tail;
     const off = new OfflineAudioContext(2, Math.ceil(dur * sampleRate), sampleRate);
     const lv = solo ? Object.fromEntries(Object.keys(LEVEL).map((k) => [k, solo.includes(k) ? LEVEL[k] : 0])) : LEVEL;
-    const g = await build(off, sc, await decode(off), lv);
+    const g = await build(off, sc, raw.ev, await decode(off), lv);
     g.setUser(1, 0);
     const fAt = (t) => { for (let i = 1; i < path.length; i++) if (t <= path[i][0]) { const [t0, f0] = path[i - 1], [t1, f1] = path[i]; return f0 + (f1 - f0) * (t - t0) / Math.max(1e-6, t1 - t0); } return path[path.length - 1][1]; };
     for (let t = 0; t <= end + 1e-9; t += 1 / 60) g.apply(fAt(t), t + 1e-4, false);
