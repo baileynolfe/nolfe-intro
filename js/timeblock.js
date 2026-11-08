@@ -201,20 +201,24 @@ addEventListener('keydown',e=>{if(!inside())return;if(!['ArrowUp','ArrowDown','A
 // [intro] The header stays away for the whole entrance and first appears once the visitor is inside.
 let chromeTimer,chromeHeld=false,chromeShown=true;
 function tellChrome(v){if(v===chromeShown)return;chromeShown=v;try{parent.postMessage({nolfe:'chrome',visible:v},'*')}catch(e){}}
-function revealChrome(){if(!inside()||chromeHeld||gliding||Math.abs(target-position)>.08||Math.abs(targetYaw-yaw)>.002){chromeTimer=setTimeout(revealChrome,100);return}tellChrome(true)}
-function hideChrome(){clearTimeout(chromeTimer);tellChrome(false);chromeTimer=setTimeout(revealChrome,900)}
+function revealChrome(){if(!inside()||chromeHeld||(gliding&&Math.abs(glideV)>.15)||Math.abs(target-position)>.5||Math.abs(targetYaw-yaw)>.02){chromeTimer=setTimeout(revealChrome,60);return}tellChrome(true)}   // [intro] quicker
+function hideChrome(){clearTimeout(chromeTimer);tellChrome(false);chromeTimer=setTimeout(revealChrome,300)}
 tellChrome(false);                                                                               // [intro]
 canvas.addEventListener('wheel',()=>{if(inside())hideChrome()},{passive:true});
 canvas.addEventListener('pointerdown',()=>{if(inside())chromeHeld=true});
 canvas.addEventListener('pointermove',()=>{if(chromeHeld&&drag&&drag.axis)hideChrome()});
-for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>{chromeHeld=false;if(!chromeShown){clearTimeout(chromeTimer);chromeTimer=setTimeout(revealChrome,900)}});
+for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>{chromeHeld=false;if(!chromeShown){clearTimeout(chromeTimer);chromeTimer=setTimeout(revealChrome,300)}});
 addEventListener('keydown',e=>{if(inside()&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Escape'].includes(e.key))hideChrome()});
 canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();running=false;still.style.visibility='visible'});canvas.addEventListener('webglcontextrestored',()=>location.reload());
 
 // In-frame site navigation (production #nolfe-overlay). [intro] Hidden by CSS until INSIDE, then behaves as before.
 (()=>{const o=document.getElementById('nolfe-overlay'),c=canvas;if(!o)return;let timer,held=false;
-function show(){if(!inside()||held||gliding||Math.abs(target-position)>.08){timer=setTimeout(show,100);return}o.classList.remove('busy')}
-function busy(){clearTimeout(timer);o.classList.add('busy');timer=setTimeout(show,1000)}
-o.classList.add('busy');Entry.on(s=>{if(s==='INSIDE'){clearTimeout(timer);timer=setTimeout(show,700)}});
-c.addEventListener('wheel',()=>{if(inside())busy()},{passive:true});c.addEventListener('pointerdown',()=>{if(!inside())return;held=true;busy()});c.addEventListener('pointermove',()=>{if(held)busy()});for(const t of ['pointerup','pointercancel','lostpointercapture'])c.addEventListener(t,()=>{if(!held)return;held=false;busy()});window.addEventListener('keydown',e=>{if(!inside())return;if(e.key==='Tab'){clearTimeout(timer);show()}else if(e.key.startsWith('Arrow'))busy()})})();
+// [intro] Faster than production: the menus come back 0.3 s after the last real input (was 1 s) and once the view is
+// nearly still (was: fully settled), and 0.25 s after arriving (was 0.7 s). A trackpad's coasting tail (small, shrinking
+// wheel deltas after the finger lifts) no longer keeps them away.
+const MENU_AFTER=300,MENU_ENTRY=250;let wAbs=0,wAt=0;
+function show(){if(!inside()||held||(gliding&&Math.abs(glideV)>.15)||Math.abs(target-position)>.5){timer=setTimeout(show,60);return}o.classList.remove('busy')}
+function busy(){clearTimeout(timer);o.classList.add('busy');timer=setTimeout(show,MENU_AFTER)}
+o.classList.add('busy');Entry.on(s=>{if(s==='INSIDE'){clearTimeout(timer);timer=setTimeout(show,MENU_ENTRY)}});
+c.addEventListener('wheel',e=>{if(!inside())return;const a=Math.abs(e.deltaY)+Math.abs(e.deltaX),now=performance.now(),coasting=now-wAt<80&&a<=wAbs&&a<12;wAbs=a;wAt=now;if(!coasting)busy()},{passive:true});c.addEventListener('pointerdown',()=>{if(!inside())return;held=true;busy()});c.addEventListener('pointermove',()=>{if(held)busy()});for(const t of ['pointerup','pointercancel','lostpointercapture'])c.addEventListener(t,()=>{if(!held)return;held=false;busy()});window.addEventListener('keydown',e=>{if(!inside())return;if(e.key==='Tab'){clearTimeout(timer);show()}else if(e.key.startsWith('Arrow'))busy()})})();
 })();
