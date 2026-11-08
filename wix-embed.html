@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Nolfe — Time</title>
+<link rel="preconnect" href="https://baileynolfe.github.io" crossorigin><link rel="preload" href="https://baileynolfe.github.io/nolfe-intro/intro/manifest.json" as="fetch" crossorigin>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+#stage{position:fixed;inset:0}
+#still,#tb{position:fixed;inset:0;width:100%;height:100%;object-fit:contain}
+#tb{touch-action:none;cursor:grab;outline:none}
+#tb:active{cursor:grabbing}
+/* Entrance */
+#intro{position:fixed;inset:0;z-index:20;overflow:hidden;background:#000;touch-action:none;outline:none;-webkit-user-select:none;user-select:none;transition:opacity 140ms linear}
+#intro.leaving{opacity:0}
+#intro-canvas,#intro-video{position:absolute;inset:0;width:100%;height:100%;display:block}
+#intro-video{object-fit:cover;display:none}
+#intro.video-mode #intro-video{display:block}
+#intro.video-mode #intro-canvas{display:none}
+#intro-grain{position:absolute;left:0;top:0;width:calc(100% + 128px);height:calc(100% + 128px);pointer-events:none;mix-blend-mode:overlay;opacity:0}
+#intro-hint{position:absolute;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));width:20px;height:30px;margin-left:-10px;color:#d5ece7;opacity:0;transition:opacity .9s ease;pointer-events:none}
+#intro-hint.on{opacity:.5}
+#intro:focus-visible #intro-hint.on{opacity:.95}
+#intro-hint svg{display:block;width:100%;height:100%;animation:nolfe-nudge 2.6s ease-in-out infinite}
+#intro-hint.wait svg{animation:nolfe-wait 1.1s ease-in-out infinite}
+@keyframes nolfe-nudge{0%,100%{transform:translateY(5px);opacity:.45}50%{transform:translateY(-3px);opacity:1}}
+@keyframes nolfe-wait{0%,100%{opacity:.3}50%{opacity:1}}
+#skip-intro{position:fixed;z-index:30;right:calc(14px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));background:none;border:0;padding:10px 8px;color:rgba(213,236,231,.42);font:11px/1 Arial,Helvetica,sans-serif;letter-spacing:.08em;cursor:pointer;opacity:0;transition:opacity .7s,color .2s}
+#skip-intro.on{opacity:1}
+#skip-intro:hover,#skip-intro:focus-visible{color:rgba(240,250,248,.92)}
+#skip-intro:focus-visible{outline:1px solid rgba(240,250,248,.6);outline-offset:1px}
+html[data-entry=crossing] #skip-intro,html[data-entry=inside] #skip-intro{display:none}
+@media (prefers-reduced-motion:reduce){#intro-hint svg{animation:none}#intro{transition-duration:0s}}
+#hud{position:fixed;left:8px;top:8px;z-index:99;margin:0;padding:6px 8px;background:rgba(0,0,0,.6);color:#9fe;font:11px/1.35 ui-monospace,Menlo,monospace;pointer-events:none;white-space:pre}
+/* Production site chrome (from the live embed). Hidden for the whole entrance. */
+#nolfe-overlay{position:fixed;inset:0;z-index:100;pointer-events:none;color:white;font:14px Arial,sans-serif}#nolfe-overlay header,#nolfe-overlay footer{position:absolute;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:18px 24px;transition:transform .35s,opacity .35s;pointer-events:auto;background:linear-gradient(#0009,transparent)}#nolfe-overlay header{top:0}#nolfe-overlay footer{bottom:0;background:linear-gradient(transparent,#0009);font-size:12px}#nolfe-overlay img{width:85px;height:70px;object-fit:contain}#nolfe-overlay nav{display:flex;gap:22px}#nolfe-overlay a{color:white;text-decoration:none}#nolfe-overlay.busy header{transform:translateY(-110%);opacity:0;pointer-events:none}#nolfe-overlay.busy footer{transform:translateY(110%);opacity:0;pointer-events:none}@media(max-width:480px){#nolfe-overlay header,#nolfe-overlay footer{padding:12px}#nolfe-overlay nav{gap:14px}#nolfe-overlay img{width:65px;height:54px}}@media(prefers-reduced-motion:reduce){#nolfe-overlay header,#nolfe-overlay footer{transition:none}}
+html:not([data-entry=inside]) #nolfe-overlay{visibility:hidden}
+</style></head><body>
+<div id="stage">
+  <img id="still" src="https://static.wixstatic.com/media/d630c3_c0e1f54744fe4c1bb978b6d6342cf581~mv2.jpg/v1/crop/x_2560,y_960,w_1280,h_960/doves.jpg" alt="">
+  <canvas id="tb" tabindex="0" aria-label="Time block. Drag vertically to travel through frames. Drag horizontally to orbit 360 degrees. Arrow keys also navigate. Double-click to return to the front."></canvas>
+  <div id="intro" role="region" tabindex="-1" aria-label="Entrance. Swipe up, scroll, or press the down arrow to open the door and walk down the stairs. Up retraces your steps.">
+    <canvas id="intro-canvas" aria-hidden="true"></canvas>
+    <video id="intro-video" muted playsinline preload="auto" aria-hidden="true"></video>
+    <div id="intro-grain" aria-hidden="true"></div>
+    <div id="intro-hint" aria-hidden="true"><svg viewBox="0 0 20 30" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 10 6l6 6"/><path d="M4 20l6-6 6 6" opacity=".55"/></svg></div>
+  </div>
+</div>
+<button id="skip-intro" type="button">skip intro</button>
+<div id="nolfe-overlay"><header><a href="https://www.nolfemedia.com/" target="_top"><img alt="Nolfe Media" src="https://static.wixstatic.com/media/d630c3_6dc3e7bf54c84c7db94365f15d267fcc~mv2.png"></a><nav><a href="https://www.nolfemedia.com/" target="_top">Home</a><a href="https://www.nolfemedia.com/projects-8" target="_top">Projects</a><a href="https://www.nolfemedia.com/about-5" target="_top">About</a></nav></header><footer><a href="mailto:nolfemedia@gmail.com">nolfemedia@gmail.com</a><span>©2026 Nolfe Media LLC</span></footer></div>
+<noscript><style>#intro,#skip-intro{display:none}html:not([data-entry=inside]) #nolfe-overlay{visibility:visible}</style></noscript>
+<script>
+/* Nolfe — entry controller.
+   One in-memory state machine shared by the intro and the time block:
+     DOOR -> JOURNEY -> CROSSING -> INSIDE
+   - DOOR <-> JOURNEY may go back and forth (retracing the stairs).
+   - Once CROSSING starts, nothing can return to DOOR/JOURNEY for this page instance.
+   - Never written to localStorage/sessionStorage and never pushed to history: a full reload starts at the door.
+   - Survives re-initialisation of either component on this page (it lives on window).
+   - In the Wix embed, the parent page can remember "entered" in Wix memory storage across in-site
+     navigation (see README): the embed asks once at boot and reports when it enters. */
+(function () {
+  'use strict';
+  if (window.NolfeEntry) return;
+  const ORDER = { DOOR: 0, JOURNEY: 1, CROSSING: 2, INSIDE: 3 };
+  const listeners = new Set();
+  let state = 'DOOR', detail = null;
+  const root = document.documentElement;
+  root.dataset.entry = 'door';
+
+  function set(next, info) {
+    if (!(next in ORDER) || next === state) return false;
+    if (ORDER[state] >= ORDER.CROSSING && ORDER[next] < ORDER[state]) return false;   // one-way
+    const prev = state; state = next; detail = info || null;
+    root.dataset.entry = next.toLowerCase();
+    for (const fn of [...listeners]) { try { fn(next, prev, detail); } catch (e) { console.error(e); } }
+    if (next === 'INSIDE') tellParent({ nolfe: 'entered' });
+    return true;
+  }
+  function tellParent(msg) { try { if (window.parent !== window) window.parent.postMessage(msg, '*'); } catch (e) {} }
+
+  // Ask the parent page (Wix) whether this visitor already entered during this page session.
+  // Resolves false immediately when standalone, or after a short timeout if no one answers.
+  function askParent(timeoutMs) {
+    return new Promise((resolve) => {
+      if (window.parent === window) return resolve(false);
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; removeEventListener('message', onMsg); resolve(v); };
+      const onMsg = (e) => { const d = e.data; if (d && d.nolfe === 'entry-state') finish(!!d.entered); };
+      addEventListener('message', onMsg);
+      tellParent({ nolfe: 'hello' });
+      setTimeout(() => finish(false), timeoutMs);
+    });
+  }
+
+  window.NolfeEntry = {
+    get state() { return state; },
+    get detail() { return detail; },
+    get entered() { return state === 'INSIDE'; },
+    get crossingOrInside() { return ORDER[state] >= ORDER.CROSSING; },
+    set, askParent, tellParent,
+    on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+  };
+})();
+
+</script>
+<script>
+/* Production time-block sprite sheets (Wix Media), copied verbatim from the live embed
+   https://www-nolfemedia-com.filesusr.com/html/d630c3_09a75ecb50def8d1ba08016f6343b6e3.html */
+window.NOLFE_TB_SHEETS = {
+"trail": [
+"https://static.wixstatic.com/media/d630c3_1fd3b03cabb9413a8a158953d82ca7bd~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7524c70c4f7247d9bf0d61c33bde93f6~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_df6ee305edb14dab93ed0b86084fd6ad~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_66b8552d32cb48d39bd497f9d5e73b73~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_650bcaf0bbab41ec9b0d8bb74ef6aad1~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_4b5b1780e84b42198f0b81b4842b5565~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_482c2adc820f4f629c070187067314b3~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_2ef094f6695446a89a14ce5802f97cc6~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_ce9694cf999f4e31ada24285087f7919~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_d8b3d69b140c4ed7828e90ba20f566f7~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_0eefb26b033145dcb45fbd817eb38433~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3bc7183199a54aabb951f1efc0768e8a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_42c339984aac449f8c75e0e8c4cb6314~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_251f8ec5d885493d92d94e3580b12d03~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_4ec778c69e0d4885b07fb3183a16641d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_27b00b8dcf1e4087ac2e0cd124d82bbe~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_4e6524b664c648f4bb21c215f90d9564~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_d4ea3a55c6974dc9891ac162d0f4fdc3~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_9fb56bba2f9e4427948549ed7fa23eb9~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_bddae0f225c8474791ebdb64c3294a0d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_d6fc4ccb3abc491494cc29571733e7d8~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7d0a8acdde0b4e79a0c4673e204b01a6~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_8c6cf265753e4650b4ab2293bf7d6020~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_623d005d4548429aace4b259cbbaf84c~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_65cb0facec7f42359bb7e8f738a56f0e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_c5d68c33a2d84843aff51a430d5e4bc0~mv2.jpg"
+],
+"hd": [
+"https://static.wixstatic.com/media/d630c3_40f159dda31f439aa3678446b77ab265~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_689e7e72190d479daf187864e13108be~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7dd5927f5a984b38b3b9762d9af1737a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6603502ecfac4ae0a4fad6fee0b7a9f5~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_79b9b3e483ef412ab6fc1c4e2004649f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_336de87d3c724751b0ffdb5a99ab573e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_ca5b8f381da0487ea6ec2207e7d9bb88~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_515658fde2ab48a88e7382084129d7b1~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f675254ddf754d81bb60d91150ef1d7b~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_aaeb4e6e440640f2bc3438cabf4b1f4b~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6c5390a7938943f8ae5091daa3b33898~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3d6e34fa5b9c424d9b62d036e0148da4~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7d76c42dd03a4d5bb6e90c7367b271cf~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_db2d8ff18be74315b370b6c9027301c7~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_c0e1f54744fe4c1bb978b6d6342cf581~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_25ffeffc814649be8d207667cd5c628d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_cea8a82ad528412fa8732d71a357f0ff~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_cc0c241e67474681b691b9f053ac3f5d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_b4d39cebc3fe47ccac308be95031e9d0~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_5e5265ad4c564b5bbfd9efbacb987a28~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_8afc8769798d4614ac422801cf7419f8~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_61f6f6e8624d416fa42cc3e032e3a77f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_e6486abe30c34ce986717a03225dea7e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f498cad78a914a37964f0ba15a1a63ad~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_a947fdef430f460dbd66057da919db25~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6d6f2531fcc5434f87521fca5517f79c~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_b579bcc218ff483c8f12d47490105bd1~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_387495fc8bb7430a86bcb62b55b87370~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7b19668d67b64dafbbce8394130d2a8a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_37c957b2206a49d2aeb91a19f89ddfee~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_e87b8765d9934af7bf1f44b5f7ad8e7a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_c0009b916ae74c559c736c2899754d71~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_bc5499b9375845ab81e757d3607ccc7c~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7183ca2706294dc59c6c84426f4bc5fa~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_fd7355c8db7f4d93afaa0c56f62dd737~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_fee71358159e4968ac9b3a5eca5dacff~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7631099799f14f5194eaf1cede59f88e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_0724f0b22d3c46f48b0029f189b7ff88~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3b002df5fc664781be867ef07cbbeb28~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_352cd683460e4106be40a9f9f18e7b80~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_c138d46696694a688fee5d01836294d9~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f6efcb6a71f04bc7a40540a0be25e75e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_ee3b4e6454024e79a16fbf0ea0ed90f9~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_d8bf6717599b49c68b7cc526235dafae~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_db8c2d0fd6ac44279522703030b066ef~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3ed2dc93ea02446ba670bbb5645be63f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_2f070d439945497bb8832fc37fd86755~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f83a60251c8949109195bdade91188f7~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_612511bda69640b3b8fcd91597a328b3~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3158577c93ac49ea9fd9032bbe82c78f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_48afacc8e08141879f21fa205b6479ce~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_e27db409208b434aa1a647bc1923afc0~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7eae5889ce4743d98f60db6f90174d08~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_b17995519c524a03990517b9889e70cb~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_a9c35e0c22e94cde8c31f88990257cef~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_dbfd3daec5664f3db8f6abc473cecd77~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_9c524e003e904651a7c6ea1e4bcf3c5b~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_fb859b0e66cd4a8bad4a33483eaaaf8d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6510743087244e6a8e9925a9e9f534e5~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_43ad5fdd381345328b866791148e7463~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_70403e1d6b9c4523b31819d0bdfc64eb~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_487be8fe847d4d75b2c880263fcf509b~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f8fb0a1734534afdae3067ce5c14699a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6695539e0b6746c2bd2a1ce7925148f3~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_142f4491edcb4b209c25f12e18aeaeb1~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_40ec28dbb67a4b1e9eaa6dbeb37a47e6~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_25891e9c45d8453eb8d2a425fa1d3783~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_0cede2e286bc4ebda23e9fdfa9a898db~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_b506954b34064155b4bb483d674d7f5a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_afbc966333ac460d8f19745b76efaa6e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_6421b7bbbb824bb287b6814c9ba0f605~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_84d922845567484990392faf8d25bc14~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7745286d524746898be7e38221b91d52~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_c259c9dddc8c4960b0a3de850ce4ad51~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3c343e05f4f14dbf93d44b875cf09887~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_12566f3610994a20903c5a399927dab2~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_acc1e3e2d8584fa2a387a1a018bea626~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_24a4b29aba0c492c9125c37ba2833897~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_fb1dfd63948f49fe81747cb159b18b72~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_e66fa9065f9f45f3860ec4700dd62224~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_90bf7c6cb81442379c2b3395b702e1fc~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3081875c6b7d42fba64fbffe4583bbbd~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_578037cd32a74ae3a32779643ede20af~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_2c7dbda9c4624c5491482f30730a6c88~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_2ae97da7b3b14346aec1fb87bd93087f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_3a598683440f44d78877be7831f2caff~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_9145140e87d24a38b9c0e329f98c7f52~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_4c539d5d03b3471997a0d9bf7186fa89~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_f36fd7a373d4496bb2583d1fdecdfd6f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_397de1b7fe3c49099202175225f2296a~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_5fa744024b20450bb0db95669056946f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_4ac8dfc1ccb24d1bb142b925dfbdc190~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_64b8ffe702084da6857796bb5cabd6e1~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_2cb8993d4d7f4fb1a480a8664e479ff6~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_bf18d66c7bd14b56829dcba68f721657~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_13abdc99841b41edb42e1cf7a5723e80~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_d6a3c59806a94753becba460b5dc224d~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_731ca954da684039b8cb78edff524214~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_79a4e7840f4c42d0b3e08b698dbfb20e~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_264448d2f4844b0e97e504ea9609443f~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_056d1f42754d40399548906840ab9cd0~mv2.jpg",
+"https://static.wixstatic.com/media/d630c3_7d1ce18dd8894c5a982246065bd4fcf8~mv2.jpg"
+],
+"still": "https://static.wixstatic.com/media/d630c3_c0e1f54744fe4c1bb978b6d6342cf581~mv2.jpg/v1/crop/x_2560,y_960,w_1280,h_960/doves.jpg"
+};
+
+</script>
+<script>
+/* Nolfe — time block (production viewer from the live Wix embed, adapted for the entrance).
+   Source of truth: https://www-nolfemedia-com.filesusr.com/html/d630c3_09a75ecb50def8d1ba08016f6343b6e3.html
+   Every behavioural change from production is marked [intro]. Outside the crossing, the camera,
+   shader, plane layout, opacity rules, HD frames, glide, keys and chrome behave exactly as before. */
+(function () {
+'use strict';
+const Entry = window.NolfeEntry;                                                   // [intro]
+const SHEETS = window.NOLFE_TB_SHEETS.trail, HD_SHEETS = window.NOLFE_TB_SHEETS.hd; // [intro] URLs moved to timeblock-sheets.js
+const N=1222,FW=640,FH=480,COLS=6,PER=48;
+const HW=1280,HH=960,HCOLS=3,HPER=12,HD_KEEP=12;
+const sheetCache=new Map();
+function sheet(i){if(!sheetCache.has(i))sheetCache.set(i,new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=SHEETS[i]}));return sheetCache.get(i)}
+const cut=document.createElement('canvas');cut.width=FW;cut.height=FH;const cutCtx=cut.getContext('2d');
+function frameCanvas(n,im){const k=n%PER;cutCtx.clearRect(0,0,FW,FH);cutCtx.drawImage(im,(k%COLS)*FW,Math.floor(k/COLS)*FH,FW,FH,0,0,FW,FH);return cut}
+const canvas=document.querySelector('#tb'),still=document.querySelector('#still');  // [intro] canvas has an id now
+const gl=canvas.getContext('webgl',{alpha:true,antialias:true,powerPreference:'high-performance'});
+// Open on the doves: frame 173, which is position 141 since frames are shifted by SEAM (32).
+const START=141;
+// [intro][fix] Production writes un-premultiplied colour into a premultiplied canvas. Where only faint ghost layers cover
+// black, colour exceeds alpha and Chrome clamps it to grey veils, while Safari shows the frames' real colours
+// (see the iPhone recording). Premultiplying makes every browser show the colours. Set false to restore production exactly.
+const PREMULTIPLY_FIX=new URLSearchParams(location.search).get('premultiply')!=='0';
+let target=START,position=START,yaw=0,targetYaw=0,pull=0,drag=null,last=0;
+const SEAM=32,PERIOD=N-SEAM;const wrap=(n,m)=>((n%m)+m)%m;
+function sample(n){let t=wrap(Math.floor(n),PERIOD)+SEAM;return {a:t,b:t>=N-SEAM?t-(N-SEAM):t,mix:t>=N-SEAM?(t-(N-SEAM))/SEAM:0}}
+const clamp=n=>n;
+function shader(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+let program,buffer,loc,cache=new Map(),pending=new Set(),failed=new Set(),running=true;
+if(gl){try{
+// [intro] the focal length f is a uniform (was the constant 1.7320508) so the crossing can match the rendered lens.
+program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,`attribute vec3 p;attribute vec2 uv;varying vec2 v;uniform float z,angle,distance,aspect,spacing,f;void main(){vec3 q=vec3(p.xy,p.z*spacing)+vec3(0.,0.,z);float c=cos(angle),s=sin(angle);q=vec3(c*q.x+s*q.z,q.y,-s*q.x+c*q.z);q.z-=distance;float near=.018,far=100.;gl_Position=vec4(q.x*f/aspect,q.y*f,(-(far+near)*q.z-2.*far*near)/(far-near),-q.z);v=uv;}`));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,`precision highp float;
+varying vec2 v;
+uniform sampler2D image,nextImage;
+uniform vec2 imageSize,nextSize;
+uniform float blend,opacity;
+vec3 filmSample(sampler2D tex,vec2 uv,vec2 size){
+ vec2 p=uv*size-.5,f=fract(p);
+ vec2 eased=f*f*(3.-2.*f);
+ vec2 q=(floor(p)+mix(f,eased,.32)+.5)/size;
+ vec2 d=1./size;
+ vec3 c=texture2D(tex,q).rgb;
+ vec3 soft=(texture2D(tex,q+vec2(d.x,0.)).rgb+texture2D(tex,q-vec2(d.x,0.)).rgb+texture2D(tex,q+vec2(0.,d.y)).rgb+texture2D(tex,q-vec2(0.,d.y)).rgb)*.25;
+ vec3 detail=c-soft;
+ float edge=smoothstep(.025,.12,length(detail));
+ // Fine detail gets a restrained lift; low contrast blocks receive slight diffusion.
+ vec3 sharpened=c+clamp(detail,vec3(-.035),vec3(.035))*.24*edge;
+ return mix(sharpened,soft,.075*(1.-edge));
+}
+void main(){
+ vec3 c=filmSample(image,v,imageSize);
+ if(blend>.0001)c=mix(c,filmSample(nextImage,v,nextSize),blend);
+ // Static, fine luminance grain: no extra downloads or animation timer.
+ vec2 pixel=gl_FragCoord.xy;
+ float grain=fract(52.9829189*fract(dot(pixel,vec2(.06711056,.00583715))))-.5;
+ float luma=dot(c,vec3(.2126,.7152,.0722));
+ c+=grain*.014*smoothstep(.015,.12,luma);
+ // [intro][fix] premultiplied output: identical framebuffer colour, but no browser-dependent clamp where only faint layers cover black
+ gl_FragColor=PREMULTIPLY?vec4(clamp(c,0.,1.)*opacity,opacity):vec4(clamp(c,0.,1.),opacity);
+}`.replace('PREMULTIPLY',PREMULTIPLY_FIX?'true':'false')));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+loc={};for(const name of ['z','angle','distance','aspect','blend','opacity','image','nextImage','spacing','imageSize','nextSize','f'])loc[name]=gl.getUniformLocation(program,name);
+const vertices=[];function quad(a,b,c,d){for(const p of [a,b,c,a,c,d])vertices.push(...p)}
+const x=4/3,y=1,d=-.14;
+quad([-x,-y,0,0,1],[x,-y,0,1,1],[x,y,0,1,0],[-x,y,0,0,0]);
+// Continuous edge ribbons carry the image perimeter through time.
+quad([-x,-y,0,0,1],[-x,y,0,0,0],[-x,y,d,0,0],[-x,-y,d,0,1]);
+quad([x,-y,0,1,1],[x,-y,d,1,1],[x,y,d,1,0],[x,y,0,1,0]);
+quad([-x,y,0,0,0],[x,y,0,1,0],[x,y,d,1,0],[-x,y,d,0,0]);
+quad([-x,-y,0,0,1],[-x,-y,d,0,1],[x,-y,d,1,1],[x,-y,0,1,1]);
+buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.STATIC_DRAW);for(const [name,size,offset] of [['p',3,0],['uv',2,12]]){let a=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,20,offset)}gl.enable(gl.BLEND);if(PREMULTIPLY_FIX)gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);else gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.clearColor(0,0,0,0);
+}catch(e){running=false;console.error(e)}}else running=false;
+function load(n){if(!running||n<0||n>=N||cache.has(n)||pending.has(n)||failed.has(n)||pending.size>=8)return;pending.add(n);sheet(Math.floor(n/PER)).then(sh=>{pending.delete(n);if(!running)return;const im=frameCanvas(n,sh);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);cache.set(n,t)},()=>{pending.delete(n);failed.add(n)})}
+// Sharp front frames are resampled to the size the front image is actually drawn at, so a phone holds no more
+// detail than its screen shows. hdW is that width in device pixels; 0 means the 640 frames already cover it.
+let hdW=0;const hdCache=new Map(),hdPending=new Set(),hdFailed=new Set(),hdSheets=new Map(),texSize=new WeakMap();
+const hcut=document.createElement('canvas'),hcutCtx=hcut.getContext('2d');
+function fitHd(){const aspect=canvas.width/canvas.height,distance=Math.max(2.35,2.5/aspect),w=canvas.width*(4/3)*1.7320508/aspect/distance;hdW=w>FW*1.1?Math.min(HW,Math.ceil(w/64)*64):0}
+// Keep only the two most recent sharp sheets decoded; each is a full 3840x3840 image.
+function hdSheet(i){let p=hdSheets.get(i);if(p)hdSheets.delete(i);else p=new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=HD_SHEETS[i]});hdSheets.set(i,p);while(hdSheets.size>2)hdSheets.delete(hdSheets.keys().next().value);return p}
+function hdLoad(n){if(!running||!hdW||n<0||n>=N||hdCache.has(n)||hdPending.has(n)||hdFailed.has(n)||hdPending.size>=2)return;hdPending.add(n);hdSheet(Math.floor(n/HPER)).then(im=>{hdPending.delete(n);if(!running||!hdW)return;const k=n%HPER,w=hdW,h=Math.round(w*3/4);if(hcut.width!==w||hcut.height!==h){hcut.width=w;hcut.height=h}hcutCtx.imageSmoothingEnabled=true;hcutCtx.imageSmoothingQuality='high';hcutCtx.drawImage(im,(k%HCOLS)*HW,Math.floor(k/HCOLS)*HH,HW,HH,0,0,w,h);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hcut);texSize.set(t,[w,h]);hdCache.set(n,t)},()=>{hdPending.delete(n);hdFailed.add(n)})}
+// The film filter in the shader works on the texture's own pixel grid, so it's told each frame's real size.
+function sizeOf(t){return texSize.get(t)||[FW,FH]}
+function bindPair(a,b){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,a);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,b);gl.uniform2fv(loc.imageSize,sizeOf(a));gl.uniform2fv(loc.nextSize,sizeOf(b))}
+// Draw at the screen's full sharpness (up to 3x) so the sharp frames show on phones too. A device that can't keep
+// a steady frame rate at that size steps down (3x, 2x, 1.5x, 1x) and stays there.
+let maxScale=3,slowT=0,slowN=0;
+function pace(raw,now){if(raw>.1||now<3000||document.hidden)return;slowT+=raw;if(++slowN<90)return;if(slowT/slowN>1/40&&maxScale>1){maxScale=maxScale>2?2:maxScale>1.5?1.5:1;resize()}slowT=0;slowN=0}
+function resize(){let r=Math.min(devicePixelRatio||1,maxScale);canvas.width=Math.round(innerWidth*r);canvas.height=Math.round(innerHeight*r);if(gl)gl.viewport(0,0,canvas.width,canvas.height);fitHd()}addEventListener('resize',resize);resize();
+let fallbackFrame=-1;const smooth=(a,b,x)=>{let t=Math.max(0,Math.min(1,(x-a)/(b-a)));return t*t*(3-2*t)};
+
+// ---------------------------------------------------------------------------------------------- [intro]
+// Entrance support. While the visitor is on the stairs the viewer only streams the textures it will need;
+// it starts drawing (hidden, under the intro) near the bottom, holding the camera exactly where the
+// rendered shot ends; the crossing then dollies from that distance to the normal resting distance.
+const F60=1.7320508;
+let mode='idle';            // 'idle' -> 'hold' -> 'cross' -> 'live'
+let hold={d:9,f:F60};       // rendered camera at the handoff, in viewer units / focal length
+let cross=null;             // {t0,T,d0,v0,f0,done}
+const restDistance=aspect=>Math.max(2.35,2.5/aspect);
+function startPlanes(){     // the plane set the viewer draws at rest on START (front view)
+  const out=[],stride=4,radius=72,center=START;
+  for(let a=0;a<4;a++)out.push(sample(center+a).a);
+  const ghosts=[];for(let k=-radius;k<=radius;k+=stride){const i=Math.floor(START/stride)*stride+k;if(i<center||i>center+3)ghosts.push(i)}
+  ghosts.sort((a,b)=>Math.abs(START-a)-Math.abs(START-b));for(const i of ghosts)out.push(sample(i).a);
+  return out}
+const NEEDED=startPlanes();
+let preloading=false;
+function preloadTick(){if(!running||mode==='live')return;for(const n of NEEDED)load(n);if(NEEDED.some(n=>!cache.has(n)&&!failed.has(n)))setTimeout(preloadTick,120)}
+function crossingCamera(now,aspect){
+  const d1=restDistance(aspect);
+  if(mode==='hold')return {d:hold.d,f:hold.f};
+  const c=cross,t=Math.min(1,(now-c.t0)/1000/c.T),T=c.T;
+  const t2=t*t,t3=t2*t,dd=c.d0-d1;
+  const v0=Math.sign(c.v0)===Math.sign(-dd)?Math.max(-2*Math.abs(dd)/T,Math.min(2*Math.abs(dd)/T,c.v0)):0;
+  const d=(2*t3-3*t2+1)*c.d0+(t3-2*t2+t)*T*v0+(-2*t3+3*t2)*d1;   // cubic Hermite, ends at rest with zero speed
+  const f=c.f0+(F60-c.f0)*smooth(0,1,t);
+  if(t>=1&&!c.done){c.done=true;setTimeout(goLive,0)}
+  return {d,f}}
+function goLive(){cross=null;mode='live';guardWheelUntil=performance.now()+3000;Entry.set('INSIDE');try{canvas.focus({preventScroll:true})}catch(e){}hideChrome()}
+const inside=()=>Entry.state==='INSIDE';
+// Residual trackpad/wheel momentum from the entrance must not scroll the block: swallow wheel events after entry
+// until the stream breaks (a >140 ms gap means a new gesture), at most 3 s. Gaps are timed at window level because
+// during the entrance the wheel events land on the intro layer, not on this canvas.
+let guardWheelUntil=0,lastWheelAt=0,wheelGap=1e9;
+addEventListener('wheel',()=>{const now=performance.now();wheelGap=now-lastWheelAt;lastWheelAt=now},{capture:true,passive:true});
+function wheelGuard(){if(performance.now()<guardWheelUntil){if(wheelGap>140){guardWheelUntil=0;return false}return true}return false}
+window.NolfeTimeBlock={
+  get running(){return running},
+  get canvas(){return canvas},
+  preload(){if(preloading)return;preloading=true;preloadTick()},
+  ready(){return !running||NEEDED.every(n=>cache.has(n)||failed.has(n))},
+  progress(){return NEEDED.filter(n=>cache.has(n)).length/NEEDED.length},
+  hold(d,f){if(mode==='idle'||mode==='hold'){mode='hold';hold={d,f};this.preload()}},
+  release(){if(mode==='hold')mode='idle'},
+  cross({d0,v0=0,f0=F60}){if(mode==='live'||cross)return;const aspect=canvas.width/canvas.height,dd=Math.abs(d0-restDistance(aspect));
+    cross={t0:performance.now(),T:Math.max(1.1,Math.min(1.9,.9+.12*dd)),d0,v0,f0,done:false};mode='cross';
+    if(!running)setTimeout(goLive,700)},
+  enterNow(){cross=null;mode='live';if(!inside())goLive()},
+  stats(){return {mode,target:+target.toFixed(2),cache:cache.size,hd:hdCache.size,needed:NEEDED.length,ready:this.ready(),maxScale,canvas:[canvas.width,canvas.height]}},
+};
+// ---------------------------------------------------------------------------------------------- [/intro]
+
+function draw(now){const raw=(now-last)/1000;let dt=Math.min(raw,.05)||.016;last=now;
+if(mode==='idle'){requestAnimationFrame(draw);return}                       // [intro] no GL work on the stairs
+if(running&&mode==='live')pace(raw,now);                                   // [intro] judge frame rate only once it owns the screen
+const ease=1-Math.exp(-dt*10);position+=(target-position)*ease;yaw+=(targetYaw-yaw)*ease;let side=Math.abs(Math.sin(yaw));pull+=(side-pull)*ease;const center=Math.floor(position),current=sample(center);
+if(!running&&current.a!==fallbackFrame){fallbackFrame=current.a;const f=current.a;sheet(Math.floor(f/PER)).then(sh=>{if(fallbackFrame===f)still.src=frameCanvas(f,sh).toDataURL('image/jpeg',.85)})}
+if(running){const planes=[];const stride=pull>.2?3:4;const radius=pull>.2?180:72;
+for(let k=-radius;k<=radius;k+=stride){let index=Math.floor(position/stride)*stride+k;let pair=sample(index);let z=(position-index)*.14;let depth=Math.cos(yaw)*z;if(index<center||index>center+3)planes.push({index,pair,z,depth,anchor:-1})}
+// Always include the exact current frame and its three immediate successors.
+for(let anchor=0;anchor<4;anchor++){let index=center+anchor,z=(position-index)*.14;planes.push({index,pair:sample(index),z,depth:Math.cos(yaw)*z,anchor})}
+for(const q of planes.filter(q=>q.anchor>=0)){load(q.pair.a);if(q.pair.mix>0)load(q.pair.b)}for(const q of [...planes].sort((a,b)=>Math.abs(a.z)-Math.abs(b.z))){load(q.pair.a);if(q.pair.mix>0)load(q.pair.b)}
+const settled=Math.abs(target-position)<1.5&&!gliding;const hdKeep=new Set();for(const q of planes)if(q.anchor>=0){hdKeep.add(q.pair.a);hdKeep.add(q.pair.b);if(settled){hdLoad(q.pair.a);if(q.pair.mix>0)hdLoad(q.pair.b)}}
+for(const [n,t] of hdCache)if(!hdKeep.has(n)&&hdCache.size>HD_KEEP){gl.deleteTexture(t);hdCache.delete(n)}
+const pick=(n,front)=>(front&&hdCache.get(n))||cache.get(n);
+const keep=new Set();for(const q of planes){keep.add(q.pair.a);keep.add(q.pair.b)}for(const [n,t] of cache)if(!keep.has(n)&&cache.size>180){gl.deleteTexture(t);cache.delete(n)}
+gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);const aspect=canvas.width/canvas.height;
+// Wider front framing preserves the original aspect ratio; side view exposes a long time ribbon.
+let distance=Math.max(2.35,2.5/aspect)+pull*4.5,focal=F60;
+if(mode==='hold'||mode==='cross'){const c=crossingCamera(now,aspect);distance=c.d;focal=c.f}   // [intro]
+gl.uniform1f(loc.f,focal);                                                                      // [intro]
+gl.uniform1f(loc.spacing,stride);gl.uniform1f(loc.angle,yaw);gl.uniform1f(loc.distance,distance);gl.uniform1f(loc.aspect,aspect);gl.uniform1i(loc.image,0);gl.uniform1i(loc.nextImage,1);
+planes.sort((a,b)=>a.depth-b.depth);
+let drew=false;
+for(const q of planes){const front=q.anchor>=0;let t=pick(q.pair.a,front);if(!t)continue;
+const travel=q.z;const fadeNear=1-smooth(distance*.2,distance*.93,travel);const fadeFar=smooth(-12,-6,travel);const frontAlpha=.20*fadeNear*fadeFar;
+const sideAlpha=.24;let alpha=frontAlpha*(1-pull)+sideAlpha*pull;
+alpha*=1-smooth(radius*.14*.77,radius*.14,Math.abs(travel));
+if(q.anchor>=0)alpha=[1,.9,.8,.7][q.anchor];
+if(alpha<.002)continue;
+bindPair(t,pick(q.pair.b,front)||t);gl.uniform1f(loc.blend,cache.has(q.pair.b)?q.pair.mix:0);gl.uniform1f(loc.opacity,alpha);gl.uniform1f(loc.z,q.z);gl.drawArrays(gl.TRIANGLES,0,6);
+// Per-frame edge ribbons make the passage of time visible from the side.
+if(pull>.05){gl.uniform1f(loc.opacity,.55*pull*fadeFar);gl.drawArrays(gl.TRIANGLES,6,24)}drew=true;
+}
+// Repaint only the current frame's rectangle after the translucent layers.
+// At a front-facing angle this clears overlapping ghosts inside the image,
+// while leaving every layered border outside its silhouette untouched.
+const clarity=smooth(Math.cos(Math.PI/9),Math.cos(Math.PI/36),Math.cos(yaw));
+const focus=planes.find(q=>q.anchor===0),focusTexture=pick(current.a,true);
+if(clarity>0&&focusTexture){
+bindPair(focusTexture,pick(current.b,true)||focusTexture);
+gl.uniform1f(loc.blend,cache.has(current.b)?current.mix:0);
+gl.uniform1f(loc.opacity,clarity);gl.uniform1f(loc.z,focus.z);
+gl.drawArrays(gl.TRIANGLES,0,6);drew=true;
+}
+if(drew)still.style.visibility='hidden';
+}requestAnimationFrame(draw)}requestAnimationFrame(draw);
+// [intro] every input handler below is inert until the visitor is INSIDE.
+canvas.addEventListener('pointerdown',e=>{if(!inside())return;stopGlide();drag={x:e.clientX,y:e.clientY,t:target,a:targetYaw,axis:null,trail:[]};canvas.setPointerCapture(e.pointerId)});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;let dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(!drag.axis&&Math.hypot(dx,dy)>5)drag.axis=Math.abs(dx)>Math.abs(dy)?'orbit':'time';if(drag.axis==='orbit')targetYaw=drag.a+dx/innerWidth*Math.PI*2;else if(drag.axis==='time'){target=clamp(drag.t-dy/innerHeight*180);const now=performance.now();drag.trail.push([now,target]);while(drag.trail.length>2&&now-drag.trail[0][0]>100)drag.trail.shift()}});
+// Momentum after a time swipe: a harder flick starts faster AND coasts longer before it comes to rest,
+// so short swipes settle almost at once and long, fast ones carry far through the block.
+let glideV=0,glideTau=0,glideAt=0,gliding=false;
+function stopGlide(){glideV=0;gliding=false}
+function glide(now){if(!gliding)return;const dt=Math.min(50,now-glideAt);glideAt=now;const next=clamp(target+glideV*dt);if(next===target&&(next===0||next===N-1))return stopGlide();target=next;glideV*=Math.exp(-dt/glideTau);if(Math.abs(glideV)<.004)return stopGlide();requestAnimationFrame(glide)}
+function release(){const d=drag;drag=null;if(!d||d.axis!=='time'||d.trail.length<2)return;const now=performance.now(),[t0,p0]=d.trail[0],[t1,p1]=d.trail[d.trail.length-1];if(now-t1>80||t1-t0<8)return;const v=(p1-p0)/(t1-t0);if(Math.abs(v)<.01)return;glideV=Math.max(-3,Math.min(3,v));glideTau=Math.min(900,120+380*Math.abs(glideV));glideAt=now;if(!gliding){gliding=true;requestAnimationFrame(glide)}}canvas.addEventListener('pointerup',release);canvas.addEventListener('pointercancel',release);canvas.addEventListener('lostpointercapture',release);
+canvas.addEventListener('wheel',e=>{e.preventDefault();if(!inside()||wheelGuard())return;stopGlide();if(e.shiftKey||Math.abs(e.deltaX)>Math.abs(e.deltaY))targetYaw+=(e.deltaX||e.deltaY)*.004;else target=clamp(target+e.deltaY*.12)},{passive:false});
+canvas.addEventListener('dblclick',()=>{if(!inside())return;targetYaw=Math.round(targetYaw/(Math.PI*2))*Math.PI*2});
+addEventListener('keydown',e=>{if(!inside())return;if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Escape'].includes(e.key))return;e.preventDefault();stopGlide();if(e.key==='ArrowUp')target=clamp(target+1);if(e.key==='ArrowDown')target=clamp(target-1);if(e.key==='ArrowLeft')targetYaw-=Math.PI/24;if(e.key==='ArrowRight')targetYaw+=Math.PI/24;if(e.key==='Home')target=START;if(e.key==='End')target=N-1;if(e.key==='Escape')targetYaw=Math.round(targetYaw/(Math.PI*2))*Math.PI*2});
+// Like the original page: the site header (Wix's, outside this frame) slides away while the time block
+// moves and drops back in once the motion (and any glide) has settled. The page's code listens for these messages.
+// [intro] The header stays away for the whole entrance and first appears once the visitor is inside.
+let chromeTimer,chromeHeld=false,chromeShown=true;
+function tellChrome(v){if(v===chromeShown)return;chromeShown=v;try{parent.postMessage({nolfe:'chrome',visible:v},'*')}catch(e){}}
+function revealChrome(){if(!inside()||chromeHeld||gliding||Math.abs(target-position)>.08||Math.abs(targetYaw-yaw)>.002){chromeTimer=setTimeout(revealChrome,100);return}tellChrome(true)}
+function hideChrome(){clearTimeout(chromeTimer);tellChrome(false);chromeTimer=setTimeout(revealChrome,900)}
+tellChrome(false);                                                                               // [intro]
+canvas.addEventListener('wheel',()=>{if(inside())hideChrome()},{passive:true});
+canvas.addEventListener('pointerdown',()=>{if(inside())chromeHeld=true});
+canvas.addEventListener('pointermove',()=>{if(chromeHeld&&drag&&drag.axis)hideChrome()});
+for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>{chromeHeld=false;if(!chromeShown){clearTimeout(chromeTimer);chromeTimer=setTimeout(revealChrome,900)}});
+addEventListener('keydown',e=>{if(inside()&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Escape'].includes(e.key))hideChrome()});
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();running=false;still.style.visibility='visible'});canvas.addEventListener('webglcontextrestored',()=>location.reload());
+
+// In-frame site navigation (production #nolfe-overlay). [intro] Hidden by CSS until INSIDE, then behaves as before.
+(()=>{const o=document.getElementById('nolfe-overlay'),c=canvas;if(!o)return;let timer,held=false;
+function show(){if(!inside()||held||gliding||Math.abs(target-position)>.08){timer=setTimeout(show,100);return}o.classList.remove('busy')}
+function busy(){clearTimeout(timer);o.classList.add('busy');timer=setTimeout(show,1000)}
+o.classList.add('busy');Entry.on(s=>{if(s==='INSIDE'){clearTimeout(timer);timer=setTimeout(show,700)}});
+c.addEventListener('wheel',()=>{if(inside())busy()},{passive:true});c.addEventListener('pointerdown',()=>{if(!inside())return;held=true;busy()});c.addEventListener('pointermove',()=>{if(held)busy()});for(const t of ['pointerup','pointercancel','lostpointercapture'])c.addEventListener(t,()=>{if(!held)return;held=false;busy()});window.addEventListener('keydown',e=>{if(!inside())return;if(e.key==='Tab'){clearTimeout(timer);show()}else if(e.key.startsWith('Arrow'))busy()})})();
+})();
+
+</script>
+<script>window.NOLFE_INTRO_CONFIG = { base: 'https://baileynolfe.github.io/nolfe-intro/intro/', mode: 'seq', format: 'webp' };</script>
+<script>
+/* Nolfe — entrance player.
+   Vertical input (swipe up / wheel / trackpad / keys) scrubs a pre-rendered camera move; stopping input lets it
+   settle and pause; reversing retraces. Horizontal input is ignored. When the shot reaches the doorway into the
+   void, the live time block (already drawing the identical view underneath) takes over, the entrance is torn down
+   and cannot come back for this page instance.
+
+   URL switches for testing: ?intro=seq|video|off  ?format=jpg|webp  ?gop=8  ?orient=landscape|portrait
+                             ?motion=reduce  ?debug  */
+(function () {
+'use strict';
+const Entry = window.NolfeEntry;
+const TB = () => window.NolfeTimeBlock;
+const Q = new URLSearchParams(location.search);
+const CFG = Object.assign({ base: 'intro/', mode: 'seq', format: 'jpg' }, window.NOLFE_INTRO_CONFIG || {});
+const MODE = Q.get('intro') || CFG.mode;
+let FORMAT = Q.get('format') || CFG.format;
+const VIDEO_KIND = Q.get('gop') === '8' ? 'mp4_gop8' : 'mp4_intra';
+const DEBUG = Q.has('debug');
+const REDUCED = Q.get('motion') === 'reduce' || matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---- tuning -------------------------------------------------------------------------------------------
+const WHEEL_PX_JOURNEY = 5200;   // wheel/trackpad delta for the whole entrance
+const SWIPE_SCREENS = 4.5;       // full-height upward swipes for the whole entrance
+const KEY_STEP = 24;             // frames per key press (one second of the shot)
+const VMAX = 60;                 // frames/s cap: at most 2.5x the rendered pace
+const K_TARGET = 9, K_FOLLOW = 7;// two cascaded lags: smooth start, no overshoot
+const INERTIA_TAU = 0.42;        // s, swipe coast
+const DECODE_CAP = 24;           // decoded frames held (~2 MB each at 960x540)
+const DECODE_CONC = 3, FETCH_CONC = 6;
+const LIFT = 0.16;               // peak exposure lift that hides the handoff
+
+const root = document.getElementById('intro');
+const cv = document.getElementById('intro-canvas');
+const ctx = cv.getContext('2d', { alpha: false });
+const video = document.getElementById('intro-video');
+const grainEl = document.getElementById('intro-grain');
+const hint = document.getElementById('intro-hint');
+const skipBtn = document.getElementById('skip-intro');
+const stage = document.getElementById('stage');
+
+const S = window.NolfeIntroStats = { mode: REDUCED ? 'reduced' : MODE, format: FORMAT, orient: null, loaded: 0, bytes: 0,
+  decoded: 0, peakDecoded: 0, decodeMs: [], seekMs: [], stale: 0, drawn: 0, firstPaint: null, crossedAt: null,
+  t0: performance.now(), fail: null, crossV0: null };
+
+let man, set, orient, H = 370, fps = 24, look = [];
+let x = 0, xs = 0, xt = 0, vel = 0, inertia = 0;
+let crossingStarted = false, alive = true, lastT = performance.now(), cutAt = 0, waitSince = 0;
+const aborter = new AbortController();
+
+// ---- loading: compressed frames in memory, a small decoded window around the camera ----------------------
+let gen = 0, inflight = 0, decodingN = 0;
+const blobs = new Map(), bitmaps = new Map(), fetching = new Set(), decoding = new Set(), tries = new Map();
+let queue = [];
+const pad4 = (i) => String(i).padStart(4, '0');
+const frameUrl = (i) => CFG.base + set[FORMAT].pattern.replace('%04d', pad4(i));
+function coarseToFine() {
+  const seen = new Set(), out = [];
+  for (const step of [16, 8, 4, 2, 1]) for (let i = 0; i <= H; i += step) if (!seen.has(i)) { seen.add(i); out.push(i); }
+  return out;
+}
+function nextToFetch() {
+  const c = Math.floor(x), dir = vel < -0.5 ? -1 : 1;
+  for (let k = 0; k <= 36; k++) { const i = c + k * dir; if (i >= 0 && i <= H && !blobs.has(i) && !fetching.has(i)) return i; }
+  while (queue.length) { const i = queue.shift(); if (!blobs.has(i) && !fetching.has(i)) return i; }
+  return -1;
+}
+function pump() {
+  if (!alive || MODE === 'video') return;
+  while (inflight < FETCH_CONC) {
+    const i = nextToFetch(); if (i < 0) return;
+    const g = gen; inflight++; fetching.add(i);
+    fetch(frameUrl(i), { signal: aborter.signal })
+      .then((r) => { if (!r.ok) throw Error('HTTP ' + r.status); return r.blob(); })
+      .then((b) => { if (g !== gen) return; blobs.set(i, b); S.loaded++; S.bytes += b.size; })
+      .catch((e) => { if (!alive || g !== gen) return; const n = (tries.get(i) || 0) + 1; tries.set(i, n);
+        if (n < 3) queue.push(i); else if (i === 0) fail('poster'); })
+      .finally(() => { inflight--; fetching.delete(i); if (g === gen) pump(); });
+  }
+}
+function decodeBlob(b) {
+  if (window.createImageBitmap) return createImageBitmap(b);
+  return new Promise((ok, no) => { const u = URL.createObjectURL(b), im = new Image();
+    im.onload = () => { URL.revokeObjectURL(u); ok(im); }; im.onerror = () => { URL.revokeObjectURL(u); no(); }; im.src = u; });
+}
+function decode(i) {
+  if (bitmaps.has(i) || decoding.has(i) || !blobs.has(i) || decodingN >= DECODE_CONC) return;
+  const g = gen, t0 = performance.now(); decoding.add(i); decodingN++;
+  decodeBlob(blobs.get(i)).then((bm) => {
+    if (g !== gen || !alive) { bm.close && bm.close(); return; }
+    bitmaps.set(i, bm); S.decodeMs.push(performance.now() - t0); if (S.decodeMs.length > 200) S.decodeMs.shift();
+    evict();
+    if (S.firstPaint == null && Math.round(x) === i) render();       // paint the door as soon as it exists
+  }).catch(() => {}).finally(() => { decoding.delete(i); decodingN--; });
+}
+function evict() {
+  while (bitmaps.size > DECODE_CAP) {
+    let worst = -1, wd = -1;
+    for (const k of bitmaps.keys()) { const d = Math.abs(k - x) + (k < x && vel > 0 ? 4 : 0); if (d > wd) { wd = d; worst = k; } }
+    const bm = bitmaps.get(worst); bitmaps.delete(worst); bm.close && bm.close();
+  }
+  S.decoded = bitmaps.size; S.peakDecoded = Math.max(S.peakDecoded, bitmaps.size);
+}
+function wantDecoded() {
+  const c = Math.round(x), dir = vel < -0.5 ? -1 : 1;
+  for (const k of [0, 1, 2, -1, 3, 4, 6, 8, 11]) { const i = c + k * dir; if (i >= 0 && i <= H && !bitmaps.has(i)) decode(i); }
+}
+
+// ---- drawing ------------------------------------------------------------------------------------------
+let cw = 0, ch = 0, lastKey = '';
+function cover(w, h) { const s = Math.max(cw / w, ch / h), dw = w * s, dh = h * s; return [(cw - dw) / 2, (ch - dh) / 2, dw, dh]; }
+function displayedFocal() {           // vertical focal length the viewer actually sees (cover-fit may crop height)
+  const s = Math.max(cw / set.w, ch / set.h); return 1.7320508 * (set.h * s) / ch;
+}
+function nearestDecoded(i) { for (let k = 1; k <= 16; k++) { if (bitmaps.has(i - k)) return i - k; if (bitmaps.has(i + k)) return i + k; } return -1; }
+function render() {
+  if (MODE === 'video' && !REDUCED) return renderVideo();
+  const a = Math.min(H, Math.floor(x)), b = Math.min(H, a + 1), fr = x - a;
+  const ia = bitmaps.has(a) ? a : nearestDecoded(a);
+  if (ia < 0) return;                                   // keep the previous image rather than flash black
+  const ib = ia === a && fr > 0.02 && b !== a && bitmaps.has(b) ? b : -1;
+  const key = `${ia}|${ib}|${ib >= 0 ? fr.toFixed(2) : ''}|${cw}x${ch}`;
+  if (key === lastKey) return; lastKey = key;
+  const [dx, dy, dw, dh] = cover(set.w, set.h);
+  ctx.globalAlpha = 1; ctx.drawImage(bitmaps.get(ia), dx, dy, dw, dh);
+  if (ib >= 0) { ctx.globalAlpha = fr; ctx.drawImage(bitmaps.get(ib), dx, dy, dw, dh); ctx.globalAlpha = 1; }
+  if (ia !== a) S.stale++;
+  S.drawn++; if (S.firstPaint == null) { S.firstPaint = performance.now() - S.t0; onFirstPaint(); }
+}
+let seekStart = 0;
+function renderVideo() {
+  if (video.readyState < 2) return;
+  if (S.firstPaint == null) { S.firstPaint = performance.now() - S.t0; onFirstPaint(); }
+  const want = (Math.min(H, Math.round(x)) + 0.5) / fps;
+  if (!video.seeking && Math.abs(video.currentTime - want) > 0.5 / fps) { seekStart = performance.now(); video.currentTime = want; }
+}
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  cw = Math.max(1, Math.round(innerWidth * dpr)); ch = Math.max(1, Math.round(innerHeight * dpr));
+  cv.width = cw; cv.height = ch; ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'medium'; lastKey = '';
+  if (man && !crossingStarted) { const o = pickOrient(); if (o !== orient) useSet(o); }
+}
+function pickOrient() { const f = Q.get('orient'); return f === 'landscape' || f === 'portrait' ? f : innerWidth >= innerHeight ? 'landscape' : 'portrait'; }
+function useSet(o) {
+  gen++; orient = S.orient = o; set = man.sets[o];
+  for (const bm of bitmaps.values()) bm.close && bm.close();
+  bitmaps.clear(); blobs.clear(); tries.clear(); S.loaded = 0; S.bytes = 0; lastKey = '';
+  if (MODE === 'video' && !REDUCED) {
+    video.src = CFG.base + set[VIDEO_KIND].src; video.load();
+  } else {
+    queue = REDUCED ? [0] : coarseToFine(); pump();      // reduced motion only ever shows the door
+  }
+}
+
+// ---- grain (live, so it costs no download and fades as we cross) ------------------------------------------
+function makeGrain() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), d = g.createImageData(128, 128);
+  for (let i = 0; i < d.data.length; i += 4) { const n = 128 + (Math.random() + Math.random() - 1) * 120; d.data[i] = n; d.data[i + 1] = n * 0.99; d.data[i + 2] = n * 1.02; d.data[i + 3] = 255; }
+  g.putImageData(d, 0, 0); grainEl.style.backgroundImage = `url(${c.toDataURL()})`;
+}
+let grainTick = 0;
+function updateGrain() {
+  const L = look[Math.min(H, Math.round(x))] ?? 1;
+  grainEl.style.opacity = (0.085 * L).toFixed(3);
+  if (L > 0 && ++grainTick % 2 === 0) grainEl.style.transform = `translate3d(${-((Math.random() * 128) | 0)}px,${-((Math.random() * 128) | 0)}px,0)`;
+}
+// Exposure lift: rises over the last frames before the doorway, peaks at the handoff, then relaxes inside.
+function updateLift(now) {
+  const pre = smooth(H - 14, H, x);
+  const post = cutAt ? Math.exp(-(now - cutAt) / 380) : 0;
+  const k = Math.max(cutAt ? 0 : pre, post);
+  stage.style.filter = k > 0.004 ? `brightness(${(1 + LIFT * k).toFixed(3)})` : '';
+}
+const smooth = (a, b, v) => { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+// ---- main loop ----------------------------------------------------------------------------------------
+function tick(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000) || 0.016; lastT = now;
+  if (cutAt) { updateLift(now); if (now - cutAt < 2000) requestAnimationFrame(tick); else stage.style.filter = ''; return; }
+  if (!alive) return;
+  if (inertia) { xt = clamp(xt + inertia * dt); inertia *= Math.exp(-dt / INERTIA_TAU); if (Math.abs(inertia) < 0.4) inertia = 0; }
+  xs += (xt - xs) * (1 - Math.exp(-K_TARGET * dt));
+  const prev = x;
+  const step = (xs - x) * (1 - Math.exp(-K_FOLLOW * dt));
+  x = clamp(x + Math.max(-VMAX * dt, Math.min(VMAX * dt, step)));
+  if (Math.abs(xt - x) < 0.003 && Math.abs(xs - xt) < 0.003) { x = xs = xt; }
+  vel = vel * 0.7 + ((x - prev) / dt) * 0.3;
+  if (!crossingStarted && !REDUCED) stateFor(now);
+  else if (REDUCED && !crossingStarted && !hint.classList.contains('on') && S.firstPaint != null) hint.classList.add('on');
+  wantDecoded(); render(); updateGrain(); updateLift(now);
+  if (DEBUG) hud(now);
+  requestAnimationFrame(tick);
+}
+const clamp = (v) => Math.max(0, Math.min(H, v));
+function stateFor(now) {
+  if (x > 0.3 || xt > 0.3) Entry.set('JOURNEY');
+  else if (x < 0.02 && xt < 0.02) { Entry.set('DOOR'); if (!hint.classList.contains('on') && performance.now() - lastInput > 2500) hint.classList.add('on'); }
+  const tb = TB();
+  // Last second of the shot: camera is level and on the time block's axis -> park the live viewer on the same view.
+  if (tb && x > H - 26) tb.hold(handoffDistanceAt(x), displayedFocal()); else if (tb && x < H - 30) tb.release();
+  if (tb && x > H * 0.5) tb.preload();
+  const committed = xt >= H - 0.5;
+  if (committed && (x >= H - 0.05 || (x >= H - 2.5 && vel > 3))) {
+    if (!tb || tb.ready() || (waitSince && now - waitSince > 10000)) cross();
+    else { if (!waitSince) waitSince = now; if (now - waitSince > 500) hint.classList.add('on', 'wait'); }
+  }
+}
+function handoffDistanceAt(fx) { return man.camera.handoffDistance - man.camera.ddPerFrameAtHandoff * (H - fx); }
+
+// ---- transitions --------------------------------------------------------------------------------------
+function cross() {
+  if (crossingStarted) return; crossingStarted = true;
+  const v0 = Math.max(0, vel) * man.camera.ddPerFrameAtHandoff;      // viewer units per second (negative = closer)
+  S.crossV0 = v0; S.crossedAt = performance.now() - S.t0;
+  Entry.set('CROSSING', { via: 'journey' });
+  TB().cross({ d0: handoffDistanceAt(x), v0, f0: displayedFocal() });
+  cutAt = performance.now();
+  root.classList.add('leaving');                                      // 140 ms crossfade at the lift's peak
+  setTimeout(teardown, 320);
+}
+function skip(via, fadeMs) {
+  if (crossingStarted) return; crossingStarted = true;
+  Entry.set('CROSSING', { via });
+  const tb = TB(); if (tb) tb.enterNow(); else Entry.set('INSIDE');
+  if (!fadeMs) { teardown(); return; }
+  root.style.transitionDuration = fadeMs + 'ms'; root.classList.add('leaving');
+  setTimeout(teardown, fadeMs + 60);
+}
+function fail(reason) { S.fail = S.fail || reason; skip('fail', 0); }
+function teardown() {
+  alive = false; gen++;
+  try { aborter.abort(); } catch (e) {}
+  for (const bm of bitmaps.values()) bm.close && bm.close();
+  bitmaps.clear(); blobs.clear(); queue = [];
+  if (video.getAttribute('src')) { video.pause(); video.removeAttribute('src'); video.load(); }
+  removeEventListener('wheel', onWheel, { passive: false }); removeEventListener('keydown', onKey, true);
+  removeEventListener('resize', resize);
+  const tbCanvas = document.getElementById('tb'); if (tbCanvas) tbCanvas.tabIndex = 0;
+  root.remove(); skipBtn.remove(); if (hudEl) { hudEl.remove(); hudEl = null; }
+  if (!cutAt) stage.style.filter = '';
+}
+
+// ---- input --------------------------------------------------------------------------------------------
+let lastInput = 0;
+function advance(df) {
+  lastInput = performance.now(); inertia = 0;
+  hint.classList.remove('on'); xt = clamp(xt + df);
+}
+function onWheel(e) {
+  if (!alive || crossingStarted) { if (alive) e.preventDefault(); return; }
+  e.preventDefault();
+  let dy = e.deltaY, dx = e.deltaX;
+  if (e.deltaMode === 1) { dy *= 16; dx *= 16; } else if (e.deltaMode === 2) { dy *= innerHeight; dx *= innerWidth; }
+  if (Math.abs(dx) > Math.abs(dy) || e.shiftKey) return;                 // horizontal never steers the entrance
+  if (REDUCED) { if (dy > 4) skip('reduced', 600); return; }
+  advance(Math.max(-240, Math.min(240, dy)) * H / WHEEL_PX_JOURNEY);
+}
+function onKey(e) {
+  if (!alive || crossingStarted) return;
+  if (e.target === skipBtn && (e.key === 'Enter' || e.key === ' ')) return;
+  const k = e.key; let df = 0;
+  if (k === 'ArrowDown' || k === 'PageDown' || k === 'Enter' || (k === ' ' && !e.shiftKey)) df = k === 'PageDown' ? 2 * KEY_STEP : KEY_STEP;
+  else if (k === 'ArrowUp' || k === 'PageUp' || (k === ' ' && e.shiftKey)) df = -(k === 'PageUp' ? 2 * KEY_STEP : KEY_STEP);
+  else return;
+  e.preventDefault(); e.stopPropagation();
+  if (REDUCED) { if (df > 0) skip('reduced', 600); return; }
+  advance(df);
+}
+let ptr = null;
+function onDown(e) {
+  if (!alive || crossingStarted || e.button > 0 || e.target === skipBtn) return;
+  unlockVideo();
+  ptr = { id: e.pointerId, x0: e.clientX, y0: e.clientY, y: e.clientY, axis: null, trail: [[performance.now(), e.clientY]] };
+  inertia = 0; try { root.setPointerCapture(e.pointerId); } catch (err) {}
+}
+function onMove(e) {
+  if (!ptr || e.pointerId !== ptr.id) return;
+  const dx = e.clientX - ptr.x0, dy = e.clientY - ptr.y0;
+  if (!ptr.axis && Math.hypot(dx, dy) > 8) ptr.axis = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+  if (ptr.axis !== 'v') return;
+  const now = performance.now(); ptr.trail.push([now, e.clientY]); while (ptr.trail.length > 2 && now - ptr.trail[0][0] > 110) ptr.trail.shift();
+  if (!REDUCED) advance((ptr.y - e.clientY) * H / (innerHeight * SWIPE_SCREENS));
+  ptr.y = e.clientY;
+}
+function onUp(e) {
+  if (!ptr || e.pointerId !== ptr.id) return;
+  const p = ptr; ptr = null;
+  if (p.axis !== 'v') return;
+  if (REDUCED) { if (p.y0 - p.y > 30) skip('reduced', 600); return; }
+  const now = performance.now(), [t0, y0] = p.trail[0], [t1, y1] = p.trail[p.trail.length - 1];
+  if (now - t1 > 90 || t1 - t0 < 10) return;
+  const pxPerS = (y0 - y1) / ((t1 - t0) / 1000);
+  inertia = Math.max(-VMAX * 1.2, Math.min(VMAX * 1.2, pxPerS * H / (innerHeight * SWIPE_SCREENS)));
+}
+let unlocked = false;
+function unlockVideo() {      // iOS paints seeked frames reliably once the element has played inside a gesture
+  if (unlocked || MODE !== 'video') return; unlocked = true;
+  const p = video.play(); if (p && p.then) p.then(() => video.pause()).catch(() => {});
+}
+
+// ---- boot ---------------------------------------------------------------------------------------------
+function onFirstPaint() {
+  setTimeout(() => { if (alive && !crossingStarted && performance.now() - lastInput > 600) hint.classList.add('on'); }, 700);
+  setTimeout(() => { if (alive) skipBtn.classList.add('on'); }, 1400);
+  setTimeout(() => { const tb = TB(); if (tb && alive) tb.preload(); }, 2500);
+}
+async function boot() {
+  skipBtn.addEventListener('click', () => skip('skip', 380));
+  addEventListener('wheel', onWheel, { passive: false });
+  addEventListener('keydown', onKey, true);
+  root.addEventListener('pointerdown', onDown); root.addEventListener('pointermove', onMove);
+  root.addEventListener('pointerup', onUp); root.addEventListener('pointercancel', onUp);
+  addEventListener('resize', resize);
+  makeGrain();
+  if (MODE === 'off') return skip('off', 0);
+  // Ask the parent page (Wix) about this session while the manifest and WebP check run, so neither waits on the other.
+  const manifestP = fetch(CFG.base + 'manifest.json', { signal: aborter.signal })
+    .then((r) => { if (!r.ok) throw Error('HTTP ' + r.status); return r.json(); });
+  manifestP.catch(() => {});
+  const [enteredBefore, webpOk] = await Promise.all([Entry.askParent(350), FORMAT === 'webp' ? canWebp() : true]);
+  if (enteredBefore) return skip('return', 0);
+  // A late answer from the parent (its page code loaded after us) still counts until the visitor starts walking.
+  const lateAnswer = (e) => { const d = e.data; if (d && d.nolfe === 'entry-state' && d.entered && !lastInput && !crossingStarted) skip('return', 250); };
+  addEventListener('message', lateAnswer); setTimeout(() => removeEventListener('message', lateAnswer), 2500);
+  if (!webpOk) FORMAT = S.format = 'jpg';
+  try { man = await manifestP; } catch (e) { return fail('manifest'); }
+  H = man.handoffFrame; fps = man.fps; look = man.look;
+  orient = null; resize(); if (!orient) useSet(pickOrient());
+  if (REDUCED) { root.classList.add('reduced'); }
+  if (MODE === 'video' && !REDUCED) {
+    root.classList.add('video-mode');
+    video.addEventListener('seeked', () => { if (seekStart) { S.seekMs.push(performance.now() - seekStart); if (S.seekMs.length > 300) S.seekMs.shift(); seekStart = 0; } });
+    video.addEventListener('error', () => fail('video'));
+  }
+  const tbCanvas = document.getElementById('tb'); if (tbCanvas) tbCanvas.tabIndex = -1;   // Tab reaches the entrance, then Skip
+  root.tabIndex = 0; root.focus({ preventScroll: true });
+  requestAnimationFrame(tick);
+  setTimeout(() => { if (S.firstPaint == null && alive) fail('timeout'); }, 9000);   // assets unreachable -> straight in
+}
+
+function canWebp() {
+  return new Promise((ok) => { const im = new Image(); im.onload = () => ok(im.width === 1); im.onerror = () => ok(false);
+    im.src = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=='; });
+}
+
+// ---- debug HUD (?debug) -------------------------------------------------------------------------------
+let hudEl = null, hudAt = 0;
+const avg = (a) => a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0;
+const p95 = (a) => { if (!a.length) return 0; const s = [...a].sort((p, c) => p - c); return s[Math.floor(s.length * 0.95)]; };
+function hud(now) {
+  if (now - hudAt < 200) return; hudAt = now;
+  if (!hudEl) { hudEl = document.createElement('pre'); hudEl.id = 'hud'; document.body.appendChild(hudEl); }
+  const tb = TB(), mb = set ? (S.decoded * set.w * set.h * 4 / 1048576).toFixed(0) : 0;
+  hudEl.textContent = `${Entry.state}  ${S.mode}/${S.format}  ${S.orient}\nframe ${x.toFixed(1)} -> ${xt.toFixed(1)} / ${H}  v ${vel.toFixed(1)} f/s\n` +
+    (MODE === 'video' ? `seek avg ${avg(S.seekMs).toFixed(1)} ms  p95 ${p95(S.seekMs).toFixed(1)} ms (${S.seekMs.length})\n`
+      : `loaded ${S.loaded}/${H + 1}  ${(S.bytes / 1048576).toFixed(2)} MB\ndecoded ${S.decoded} (~${mb} MB)  decode ${avg(S.decodeMs).toFixed(1)} ms  stale ${S.stale}/${S.drawn}\n`) +
+    `first paint ${S.firstPaint == null ? '-' : S.firstPaint.toFixed(0) + ' ms'}  tb ${tb ? JSON.stringify(tb.stats()) : '-'}`;
+}
+if (DEBUG) addEventListener('keydown', (e) => { if (e.key === 'h') hudEl && hudEl.remove(); });
+
+boot();
+})();
+
+</script>
+</body></html>
