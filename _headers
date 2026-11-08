@@ -1,0 +1,7 @@
+# Netlify / Cloudflare Pages headers. The Wix embed (served from *.filesusr.com) fetches the intro frames cross-origin.
+/intro/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=86400
+/intro/manifest.json
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300
