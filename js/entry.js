@@ -41,6 +41,31 @@
     });
   }
 
+  // In-site navigation through Wix. The menu inside the embed links to other pages with target=_top, which reloads the
+  // whole Wix page and clears the parent's in-memory "entered" flag. When the Home page code says it can navigate
+  // (entry-state with nav:true), those clicks ask it to change pages with Wix's own router instead (no reload), so
+  // coming back to Home lands straight in the time block. If the page doesn't confirm within 800 ms, the link opens
+  // normally.
+  let parentNav = false, navTimer = 0;
+  addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || e.source !== window.parent) return;
+    if (d.nolfe === 'entry-state' && d.nav) parentNav = true;
+    if (d.nolfe === 'nav-ack') { clearTimeout(navTimer); navTimer = 0; }
+  });
+  document.addEventListener('click', (e) => {
+    if (!parentNav || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target && e.target.closest && e.target.closest('a[href]');
+    if (!a || (a.target && a.target !== '_top')) return;
+    let u; try { u = new URL(a.href, location.href); } catch (err) { return; }
+    if (!/^https?:$/.test(u.protocol) || !/(^|\.)nolfemedia\.com$/.test(u.hostname)) return;
+    e.preventDefault();
+    if (u.pathname === '/' || u.pathname === '') return;            // Home: this is Home already
+    tellParent({ nolfe: 'navigate', href: u.href });
+    clearTimeout(navTimer);
+    navTimer = setTimeout(() => { navTimer = 0; window.open(u.href, '_top'); }, 800);
+  }, true);
+
   window.NolfeEntry = {
     get state() { return state; },
     get detail() { return detail; },
