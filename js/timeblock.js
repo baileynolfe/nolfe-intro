@@ -5,21 +5,22 @@
 (function () {
 'use strict';
 const Entry = window.NolfeEntry;                                                   // [intro]
-const SHEETS = window.NOLFE_TB_SHEETS.trail, HD_SHEETS = window.NOLFE_TB_SHEETS.hd; // [intro] URLs moved to timeblock-sheets.js
-const N=1222,FW=640,FH=480,COLS=6,PER=48;
-// [intro] Memory: phones and tablets (coarse pointer) count GPU textures against the page's own memory budget, and run
-// out sooner. They keep fewer textures; everyone releases decoded sprite sheets (3840x3840, ~59 MB each) once unused.
+// [intro] Frames are served one by one: cut losslessly (jpegtran, pixel-identical) from the production sprite sheets
+// and hosted with the intro (intro/tb/t = 640x480, intro/tb/h = 1280x960 sharp). Showing a frame now decodes ~1.2 MB
+// (sharp ~4.9 MB) instead of a whole 3840x3840 sprite sheet (~59 MB), which is what closed the page on iPhones. Decoded
+// frames are drawn into the same cut canvas as before and released at once, so the GPU sees exactly what it always did.
+const N=1222,FW=640,FH=480;
+// Phones and tablets (coarse pointer) count GPU memory against the page's own budget: fewer textures, no antialiasing.
 const COARSE=matchMedia('(pointer:coarse)').matches;
-const HW=1280,HH=960,HCOLS=3,HPER=12,HD_KEEP=COARSE?8:12,TEX_CAP=COARSE?96:180,SHEET_IDLE_MS=2500;
-const sheetCache=new Map(),sheetUsed=new Map();
-function sheet(i){sheetUsed.set(i,performance.now());if(!sheetCache.has(i))sheetCache.set(i,new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=SHEETS[i]}));return sheetCache.get(i)}
-// [intro] A decoded sheet is only needed while its frames are being cut into textures: drop the ones nothing has used
-// for a moment (the frames already cut stay on the GPU; a sheet needed again is re-read from the HTTP cache).
-setInterval(()=>{const now=performance.now();for(const [i,t] of sheetUsed)if(now-t>SHEET_IDLE_MS&&!pending.size){const p=sheetCache.get(i);sheetCache.delete(i);sheetUsed.delete(i);if(p)p.then(im=>{im.src=''},()=>{})}},1000);
+const HW=1280,HH=960,HD_KEEP=COARSE?8:12,TEX_CAP=COARSE?96:180;
+const frameUrl=(n,sharp)=>((window.NOLFE_INTRO_CONFIG||{}).base||'intro/')+'tb/'+(sharp?'h/':'t/')+String(n).padStart(4,'0')+'.jpg';
+function decodeFrame(url){if(window.createImageBitmap)return fetch(url,{mode:'cors'}).then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.blob()}).then(b=>createImageBitmap(b));
+  return new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=url})}
+const freeFrame=im=>{if(im&&im.close)im.close()};
 const cut=document.createElement('canvas');cut.width=FW;cut.height=FH;const cutCtx=cut.getContext('2d');
-function frameCanvas(n,im){const k=n%PER;cutCtx.clearRect(0,0,FW,FH);cutCtx.drawImage(im,(k%COLS)*FW,Math.floor(k/COLS)*FH,FW,FH,0,0,FW,FH);return cut}
+function frameCanvas(im){cutCtx.clearRect(0,0,FW,FH);cutCtx.drawImage(im,0,0,FW,FH);return cut}
 const canvas=document.querySelector('#tb'),still=document.querySelector('#still');  // [intro] canvas has an id now
-const gl=canvas.getContext('webgl',{alpha:true,antialias:true,powerPreference:'high-performance'});
+const gl=canvas.getContext('webgl',{alpha:true,antialias:!COARSE,powerPreference:'high-performance'});
 // Open on the doves: frame 173, which is position 141 since frames are shifted by SEAM (32).
 const START=141;
 // [intro][fix] Production writes un-premultiplied colour into a premultiplied canvas. Where only faint ghost layers cover
@@ -74,15 +75,14 @@ quad([-x,y,0,0,0],[x,y,0,1,0],[x,y,d,1,0],[-x,y,d,0,0]);
 quad([-x,-y,0,0,1],[-x,-y,d,0,1],[x,-y,d,1,1],[x,-y,0,1,1]);
 buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.STATIC_DRAW);for(const [name,size,offset] of [['p',3,0],['uv',2,12]]){let a=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,20,offset)}gl.enable(gl.BLEND);if(PREMULTIPLY_FIX)gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);else gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.clearColor(0,0,0,0);
 }catch(e){running=false;console.error(e)}}else running=false;
-function load(n){if(!running||n<0||n>=N||cache.has(n)||pending.has(n)||failed.has(n)||pending.size>=8)return;pending.add(n);sheet(Math.floor(n/PER)).then(sh=>{pending.delete(n);if(!running)return;const im=frameCanvas(n,sh);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);cache.set(n,t)},()=>{pending.delete(n);failed.add(n)})}
+function load(n){if(!running||n<0||n>=N||cache.has(n)||pending.has(n)||failed.has(n)||pending.size>=8)return;pending.add(n);decodeFrame(frameUrl(n)).then(fr=>{pending.delete(n);if(!running){freeFrame(fr);return}const im=frameCanvas(fr);freeFrame(fr);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);cache.set(n,t)},()=>{pending.delete(n);failed.add(n)})}
 // Sharp front frames are resampled to the size the front image is actually drawn at, so a phone holds no more
 // detail than its screen shows. hdW is that width in device pixels; 0 means the 640 frames already cover it.
-let hdW=0;const hdCache=new Map(),hdPending=new Set(),hdFailed=new Set(),hdSheets=new Map(),texSize=new WeakMap();
+let hdW=0;const hdCache=new Map(),hdPending=new Set(),hdFailed=new Set(),texSize=new WeakMap();
 const hcut=document.createElement('canvas'),hcutCtx=hcut.getContext('2d');
 function fitHd(){const aspect=canvas.width/canvas.height,distance=Math.max(2.35,2.5/aspect),w=canvas.width*(4/3)*1.7320508/aspect/distance;hdW=w>FW*1.1?Math.min(HW,Math.ceil(w/64)*64):0}
-// Keep only the two most recent sharp sheets decoded; each is a full 3840x3840 image.
-function hdSheet(i){let p=hdSheets.get(i);if(p)hdSheets.delete(i);else p=new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=HD_SHEETS[i]});hdSheets.set(i,p);while(hdSheets.size>2)hdSheets.delete(hdSheets.keys().next().value);return p}
-function hdLoad(n){if(!running||!hdW||n<0||n>=N||hdCache.has(n)||hdPending.has(n)||hdFailed.has(n)||hdPending.size>=2)return;hdPending.add(n);hdSheet(Math.floor(n/HPER)).then(im=>{hdPending.delete(n);if(!running||!hdW)return;const k=n%HPER,w=hdW,h=Math.round(w*3/4);if(hcut.width!==w||hcut.height!==h){hcut.width=w;hcut.height=h}hcutCtx.imageSmoothingEnabled=true;hcutCtx.imageSmoothingQuality='high';hcutCtx.drawImage(im,(k%HCOLS)*HW,Math.floor(k/HCOLS)*HH,HW,HH,0,0,w,h);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hcut);texSize.set(t,[w,h]);hdCache.set(n,t)},()=>{hdPending.delete(n);hdFailed.add(n)})}
+// Sharp frames are single 1280x960 images too (intro/tb/h).
+function hdLoad(n){if(!running||!hdW||n<0||n>=N||hdCache.has(n)||hdPending.has(n)||hdFailed.has(n)||hdPending.size>=2)return;hdPending.add(n);decodeFrame(frameUrl(n,true)).then(im=>{hdPending.delete(n);if(!running||!hdW){freeFrame(im);return}const w=hdW,h=Math.round(w*3/4);if(hcut.width!==w||hcut.height!==h){hcut.width=w;hcut.height=h}hcutCtx.imageSmoothingEnabled=true;hcutCtx.imageSmoothingQuality='high';hcutCtx.drawImage(im,0,0,HW,HH,0,0,w,h);freeFrame(im);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hcut);texSize.set(t,[w,h]);hdCache.set(n,t)},()=>{hdPending.delete(n);hdFailed.add(n)})}
 // The film filter in the shader works on the texture's own pixel grid, so it's told each frame's real size.
 function sizeOf(t){return texSize.get(t)||[FW,FH]}
 function bindPair(a,b){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,a);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,b);gl.uniform2fv(loc.imageSize,sizeOf(a));gl.uniform2fv(loc.nextSize,sizeOf(b))}
@@ -149,7 +149,7 @@ function draw(now){const raw=(now-last)/1000;let dt=Math.min(raw,.05)||.016;last
 if(mode==='idle'){requestAnimationFrame(draw);return}                       // [intro] no GL work on the stairs
 if(running&&mode==='live')pace(raw,now);                                   // [intro] judge frame rate only once it owns the screen
 const ease=1-Math.exp(-dt*10);position+=(target-position)*ease;yaw+=(targetYaw-yaw)*ease;let side=Math.abs(Math.sin(yaw));pull+=(side-pull)*ease;const center=Math.floor(position),current=sample(center);
-if(!running&&current.a!==fallbackFrame){fallbackFrame=current.a;const f=current.a;sheet(Math.floor(f/PER)).then(sh=>{if(fallbackFrame===f)still.src=frameCanvas(f,sh).toDataURL('image/jpeg',.85)})}
+if(!running&&current.a!==fallbackFrame){fallbackFrame=current.a;still.src=frameUrl(current.a)}
 if(running){const planes=[];const stride=pull>.2?3:4;const radius=pull>.2?180:72;
 for(let k=-radius;k<=radius;k+=stride){let index=Math.floor(position/stride)*stride+k;let pair=sample(index);let z=(position-index)*.14;let depth=Math.cos(yaw)*z;if(index<center||index>center+3)planes.push({index,pair,z,depth,anchor:-1})}
 // Always include the exact current frame and its three immediate successors.
