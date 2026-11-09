@@ -14,9 +14,20 @@ const N=1222,FW=640,FH=480;
 const COARSE=matchMedia('(pointer:coarse)').matches;
 const HW=1280,HH=960,HD_KEEP=COARSE?8:12,TEX_CAP=COARSE?96:180;
 const frameUrl=(n,sharp)=>((window.NOLFE_INTRO_CONFIG||{}).base||'intro/')+'tb/'+(sharp?'h/':'t/')+String(n).padStart(4,'0')+'.jpg';
-function decodeFrame(url){if(window.createImageBitmap)return fetch(url,{mode:'cors'}).then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.blob()}).then(b=>createImageBitmap(b));
-  return new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';im.onload=()=>ok(im);im.onerror=no;im.src=url})}
-const freeFrame=im=>{if(im&&im.close)im.close()};
+// [intro] Fast scrolling on iPhone: a download for a frame the view has already left is cancelled so it doesn't hold a
+// slot, and a failed one is retried instead of staying blank. Frames decode to ImageBitmaps closed right after upload
+// (an <img> + decode() version kept twice the memory).
+function decodeFrame(url,ctl){
+  if(!window.createImageBitmap)return new Promise((ok,no)=>{const im=new Image();im.crossOrigin='anonymous';
+    if(ctl)ctl.cancel=()=>{im.onload=im.onerror=null;im.removeAttribute('src');no(Error('cancelled'))};
+    im.onload=()=>ok(im);im.onerror=()=>no(Error('failed'));im.src=url});
+  const ac=window.AbortController?new AbortController():null;if(ctl&&ac)ctl.cancel=()=>ac.abort();
+  return fetch(url,{mode:'cors',signal:ac?ac.signal:undefined}).then(r=>{if(!r.ok)throw Error('failed');return r.blob()}).then(b=>createImageBitmap(b))
+    .catch(e=>{throw e&&e.name==='AbortError'?Error('cancelled'):e})}
+const freeFrame=im=>{if(!im)return;if(im.close)im.close();else{im.onload=im.onerror=null;im.removeAttribute('src')}};
+const LOAD_MAX=12,HD_MAX=3,pendingCtl=new Map(),hdCtl=new Map(),tries=new Map();
+const giveUp=(set,n,e)=>{if(e&&e.message==='cancelled')return;set.add(n);const k=(tries.get(n)||0)+1;tries.set(n,k);if(k<4)setTimeout(()=>set.delete(n),1500*k)};
+const Q={drawn:0,blank:0,stand:0,still:false,hdT0:0,hdMs:[]};   // [intro] measured: frames drawn, front shown black, front stood in, sharp-frame delay
 const cut=document.createElement('canvas');cut.width=FW;cut.height=FH;const cutCtx=cut.getContext('2d');
 function frameCanvas(im){cutCtx.clearRect(0,0,FW,FH);cutCtx.drawImage(im,0,0,FW,FH);return cut}
 const canvas=document.querySelector('#tb'),still=document.querySelector('#still');  // [intro] canvas has an id now
@@ -75,14 +86,14 @@ quad([-x,y,0,0,0],[x,y,0,1,0],[x,y,d,1,0],[-x,y,d,0,0]);
 quad([-x,-y,0,0,1],[-x,-y,d,0,1],[x,-y,d,1,1],[x,-y,0,1,1]);
 buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vertices),gl.STATIC_DRAW);for(const [name,size,offset] of [['p',3,0],['uv',2,12]]){let a=gl.getAttribLocation(program,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,20,offset)}gl.enable(gl.BLEND);if(PREMULTIPLY_FIX)gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);else gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.clearColor(0,0,0,0);
 }catch(e){running=false;console.error(e)}}else running=false;
-function load(n){if(!running||n<0||n>=N||cache.has(n)||pending.has(n)||failed.has(n)||pending.size>=8)return;pending.add(n);decodeFrame(frameUrl(n)).then(fr=>{pending.delete(n);if(!running){freeFrame(fr);return}const im=frameCanvas(fr);freeFrame(fr);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);cache.set(n,t)},()=>{pending.delete(n);failed.add(n)})}
+function load(n){if(!running||n<0||n>=N||cache.has(n)||pending.has(n)||failed.has(n)||pending.size>=LOAD_MAX)return;pending.add(n);const ctl={};pendingCtl.set(n,ctl);decodeFrame(frameUrl(n),ctl).then(fr=>{pending.delete(n);pendingCtl.delete(n);if(!running){freeFrame(fr);return}const im=frameCanvas(fr);freeFrame(fr);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);cache.set(n,t)},e=>{pending.delete(n);pendingCtl.delete(n);giveUp(failed,n,e)})}
 // Sharp front frames are resampled to the size the front image is actually drawn at, so a phone holds no more
 // detail than its screen shows. hdW is that width in device pixels; 0 means the 640 frames already cover it.
 let hdW=0;const hdCache=new Map(),hdPending=new Set(),hdFailed=new Set(),texSize=new WeakMap();
 const hcut=document.createElement('canvas'),hcutCtx=hcut.getContext('2d');
 function fitHd(){const aspect=canvas.width/canvas.height,distance=Math.max(2.35,2.5/aspect),w=canvas.width*(4/3)*1.7320508/aspect/distance;hdW=w>FW*1.1?Math.min(HW,Math.ceil(w/64)*64):0}
 // Sharp frames are single 1280x960 images too (intro/tb/h).
-function hdLoad(n){if(!running||!hdW||n<0||n>=N||hdCache.has(n)||hdPending.has(n)||hdFailed.has(n)||hdPending.size>=2)return;hdPending.add(n);decodeFrame(frameUrl(n,true)).then(im=>{hdPending.delete(n);if(!running||!hdW){freeFrame(im);return}const w=hdW,h=Math.round(w*3/4);if(hcut.width!==w||hcut.height!==h){hcut.width=w;hcut.height=h}hcutCtx.imageSmoothingEnabled=true;hcutCtx.imageSmoothingQuality='high';hcutCtx.drawImage(im,0,0,HW,HH,0,0,w,h);freeFrame(im);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hcut);texSize.set(t,[w,h]);hdCache.set(n,t)},()=>{hdPending.delete(n);hdFailed.add(n)})}
+function hdLoad(n){if(!running||!hdW||n<0||n>=N||hdCache.has(n)||hdPending.has(n)||hdFailed.has(n)||hdPending.size>=HD_MAX)return;hdPending.add(n);const ctl={};hdCtl.set(n,ctl);decodeFrame(frameUrl(n,true),ctl).then(im=>{hdPending.delete(n);hdCtl.delete(n);if(!running||!hdW){freeFrame(im);return}const w=hdW,h=Math.round(w*3/4);if(hcut.width!==w||hcut.height!==h){hcut.width=w;hcut.height=h}hcutCtx.imageSmoothingEnabled=true;hcutCtx.imageSmoothingQuality='high';hcutCtx.drawImage(im,0,0,HW,HH,0,0,w,h);freeFrame(im);let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,hcut);texSize.set(t,[w,h]);hdCache.set(n,t)},e=>{hdPending.delete(n);hdCtl.delete(n);giveUp(hdFailed,n,e)})}
 // The film filter in the shader works on the texture's own pixel grid, so it's told each frame's real size.
 function sizeOf(t){return texSize.get(t)||[FW,FH]}
 function bindPair(a,b){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,a);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,b);gl.uniform2fv(loc.imageSize,sizeOf(a));gl.uniform2fv(loc.nextSize,sizeOf(b))}
@@ -141,7 +152,7 @@ window.NolfeTimeBlock={
     cross={t0:performance.now(),T:Math.max(1.1,Math.min(1.9,.9+.12*dd)),d0,v0,f0,done:false};mode='cross';
     if(!running)setTimeout(goLive,700)},
   enterNow(){cross=null;mode='live';if(!inside())goLive()},
-  stats(){return {mode,target:+target.toFixed(2),cache:cache.size,hd:hdCache.size,needed:NEEDED.length,ready:this.ready(),maxScale,canvas:[canvas.width,canvas.height]}},
+  stats(){return {mode,target:+target.toFixed(2),cache:cache.size,hd:hdCache.size,needed:NEEDED.length,ready:this.ready(),maxScale,canvas:[canvas.width,canvas.height],drawn:Q.drawn,blank:Q.blank,stand:Q.stand,hdMs:Q.hdMs.slice(-20)}},
 };
 // ---------------------------------------------------------------------------------------------- [/intro]
 
@@ -154,11 +165,20 @@ if(running){const planes=[];const stride=pull>.2?3:4;const radius=pull>.2?180:72
 for(let k=-radius;k<=radius;k+=stride){let index=Math.floor(position/stride)*stride+k;let pair=sample(index);let z=(position-index)*.14;let depth=Math.cos(yaw)*z;if(index<center||index>center+3)planes.push({index,pair,z,depth,anchor:-1})}
 // Always include the exact current frame and its three immediate successors.
 for(let anchor=0;anchor<4;anchor++){let index=center+anchor,z=(position-index)*.14;planes.push({index,pair:sample(index),z,depth:Math.cos(yaw)*z,anchor})}
+// [intro] where the view will come to rest (a fling glides on: its remaining travel is speed x decay time) loads first
+const land=target+(gliding?glideV*glideTau:0),landing=[0,1,2,3].map(a=>sample(Math.floor(land)+a)),nearLand=Math.abs(land-position)<12;
+if(nearLand)hdLoad(landing[0].a);   // its sharp version is requested before the regular frames, so it isn't queued behind them
+for(const p of landing){load(p.a);if(p.mix>0)load(p.b)}
 for(const q of planes.filter(q=>q.anchor>=0)){load(q.pair.a);if(q.pair.mix>0)load(q.pair.b)}for(const q of [...planes].sort((a,b)=>Math.abs(a.z)-Math.abs(b.z))){load(q.pair.a);if(q.pair.mix>0)load(q.pair.b)}
-const settled=Math.abs(target-position)<1.5&&!gliding;const hdKeep=new Set();for(const q of planes)if(q.anchor>=0){hdKeep.add(q.pair.a);hdKeep.add(q.pair.b);if(settled){hdLoad(q.pair.a);if(q.pair.mix>0)hdLoad(q.pair.b)}}
+const settled=Math.abs(target-position)<1.5&&!gliding;const hdKeep=new Set();
+// [intro] the sharp version of the frame it will rest on starts while it is still gliding in, ahead of the frames behind it
+if(nearLand)hdKeep.add(landing[0].a);if(settled)hdLoad(current.a);for(const q of planes)if(q.anchor>=0){hdKeep.add(q.pair.a);hdKeep.add(q.pair.b);if(settled){hdLoad(q.pair.a);if(q.pair.mix>0)hdLoad(q.pair.b)}}
 for(const [n,t] of hdCache)if(!hdKeep.has(n)&&hdCache.size>HD_KEEP){gl.deleteTexture(t);hdCache.delete(n)}
 const pick=(n,front)=>(front&&hdCache.get(n))||cache.get(n);
-const keep=new Set();for(const q of planes){keep.add(q.pair.a);keep.add(q.pair.b)}for(const [n,t] of cache)if(!keep.has(n)&&cache.size>TEX_CAP){gl.deleteTexture(t);cache.delete(n)}
+const nearest=n=>{for(let d=1;d<=36;d++){const t=cache.get(n-d)||cache.get(n+d);if(t)return t}return null};   // [intro] never black
+const keep=new Set();for(const q of planes){keep.add(q.pair.a);keep.add(q.pair.b)}for(const p of landing){keep.add(p.a);keep.add(p.b)}
+for(const [n,c] of pendingCtl)if(!keep.has(n)&&c.cancel)c.cancel();for(const [n,c] of hdCtl)if(!hdKeep.has(n)&&c.cancel)c.cancel();   // [intro] drop what the view has left
+for(const [n,t] of cache)if(!keep.has(n)&&cache.size>TEX_CAP){gl.deleteTexture(t);cache.delete(n)}
 gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.useProgram(program);const aspect=canvas.width/canvas.height;
 // Wider front framing preserves the original aspect ratio; side view exposes a long time ribbon.
 let distance=Math.max(2.35,2.5/aspect)+pull*4.5,focal=F60;
@@ -167,7 +187,7 @@ gl.uniform1f(loc.f,focal);                                                      
 gl.uniform1f(loc.spacing,stride);gl.uniform1f(loc.angle,yaw);gl.uniform1f(loc.distance,distance);gl.uniform1f(loc.aspect,aspect);gl.uniform1i(loc.image,0);gl.uniform1i(loc.nextImage,1);
 planes.sort((a,b)=>a.depth-b.depth);
 let drew=false;
-for(const q of planes){const front=q.anchor>=0;let t=pick(q.pair.a,front);if(!t)continue;
+for(const q of planes){const front=q.anchor>=0;let t=pick(q.pair.a,front)||nearest(q.pair.a);if(!t)continue;
 const travel=q.z;const fadeNear=1-smooth(distance*.2,distance*.93,travel);const fadeFar=smooth(-12,-6,travel);const frontAlpha=.20*fadeNear*fadeFar;
 const sideAlpha=.24;let alpha=frontAlpha*(1-pull)+sideAlpha*pull;
 alpha*=1-smooth(radius*.14*.77,radius*.14,Math.abs(travel));
@@ -181,7 +201,8 @@ if(pull>.05){gl.uniform1f(loc.opacity,.55*pull*fadeFar);gl.drawArrays(gl.TRIANGL
 // At a front-facing angle this clears overlapping ghosts inside the image,
 // while leaving every layered border outside its silhouette untouched.
 const clarity=smooth(Math.cos(Math.PI/9),Math.cos(Math.PI/36),Math.cos(yaw));
-const focus=planes.find(q=>q.anchor===0),focusTexture=pick(current.a,true);
+const focus=planes.find(q=>q.anchor===0),focusTexture=pick(current.a,true)||nearest(current.a);
+if(mode==='live'){Q.drawn++;if(!cache.has(current.a)&&!hdCache.has(current.a)){if(focusTexture)Q.stand++;else Q.blank++}const still_=Math.abs(target-position)<.05&&!gliding;if(still_&&!Q.still&&hdW){if(hdCache.has(current.a))Q.hdMs.push(0);else Q.hdT0=now}Q.still=still_;if(Q.hdT0&&(hdCache.has(current.a)||!still_)){if(hdCache.has(current.a))Q.hdMs.push(Math.round(now-Q.hdT0));Q.hdT0=0}}
 if(clarity>0&&focusTexture){
 bindPair(focusTexture,pick(current.b,true)||focusTexture);
 gl.uniform1f(loc.blend,cache.has(current.b)?current.mix:0);
